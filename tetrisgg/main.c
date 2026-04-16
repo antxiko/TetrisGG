@@ -9,6 +9,8 @@
    Volumen: 0=máx, 15=silencio (atenuación).
    ================================================================ */
 __sfr __at 0x7F PSG_port;
+__sfr __at 0x00 GG_port00;    /* GG: bit 7 = Start button (0=pressed) */
+#define GG_START_PRESSED()  (!(GG_port00 & 0x80))
 
 static void psg_set_tone(unsigned char chan, unsigned int count)
 {
@@ -586,15 +588,26 @@ static signed char   cur_x;
 static signed char   cur_y;
 static unsigned char next_type;    /* pieza que caerá después */
 
-/* PRNG xorshift 8-bit */
-static unsigned char rng_state = 0xA5;
+/* PRNG xorshift 16-bit — ciclo 65535, buena distribución */
+static unsigned int rng_state;
+
+static void rng_seed(void)
+{
+  /* Mezclar dos lecturas de VCount para semilla de 16 bits */
+  unsigned char a = SMS_getVCount();
+  unsigned char b;
+  /* Pequeño busy-wait para que la segunda lectura difiera */
+  { unsigned char j; for (j = 0; j < a; j++); }
+  b = SMS_getVCount();
+  rng_state = ((unsigned int)a << 8) | b;
+  if (rng_state == 0) rng_state = 0xBEEF;
+}
+
 static unsigned char rand7(void)
 {
-  unsigned char r = rng_state;
-  r ^= (unsigned char)(r << 3);
-  r ^= (unsigned char)(r >> 5);
-  r ^= (unsigned char)(r << 1);
-  rng_state = r ? r : 1;
+  rng_state ^= rng_state << 7;
+  rng_state ^= rng_state >> 9;
+  rng_state ^= rng_state << 8;
   return (unsigned char)(rng_state % 7);
 }
 
@@ -907,9 +920,9 @@ static void paint_full_board(void)
    ================================================================ */
 /* Frames por caída según nivel (tabla tipo NES Tetris aproximada) */
 static const unsigned char fall_table[] = {
-  48, 43, 38, 33, 28, 23, 18, 13, 8, 6,
-   5,  5,  5,  4,  4,  4,  3,  3, 3, 2,
-   2,  2,  2,  2,  2,  2,  2,  2, 2, 1
+  30, 26, 22, 18, 15, 12, 10, 8, 6, 5,
+   4,  4,  3,  3,  3,  2,  2, 2, 2, 1,
+   1,  1,  1,  1,  1,  1,  1, 1, 1, 1
 };
 #define MAX_LEVEL ((sizeof(fall_table)/sizeof(fall_table[0])) - 1)
 
@@ -925,10 +938,14 @@ static unsigned char need_hud_refresh = 1;
 static unsigned char heartbeat = 0;
 
 /* ---- Estado del juego para animación de line clear ---- */
-#define STATE_PLAY  0
-#define STATE_FLASH 1
+#define STATE_TITLE    0
+#define STATE_PLAY     1
+#define STATE_FLASH    2
+#define STATE_GAMEOVER 3
+#define STATE_PAUSE    4
 
-static unsigned char game_state = STATE_PLAY;
+static unsigned char game_state = STATE_TITLE;
+static unsigned char start_was_pressed = 0;  /* para edge-detect del Start de GG */
 static unsigned char flash_rows[4];     /* índices (en board) de las filas llenas */
 static unsigned char n_flash_rows = 0;
 static unsigned char flash_timer = 0;
@@ -995,7 +1012,7 @@ static unsigned char piece_step_down(void)
   }
 
   /* Sin líneas: flujo normal, spawn inmediato. */
-  if (!spawn_piece()) game_over = 1;
+  if (!spawn_piece()) { game_over = 1; game_state = STATE_GAMEOVER; }
   need_hud_refresh = 1;
   return 0;
 }
@@ -1032,10 +1049,68 @@ static void finalize_line_clear(void)
   n_flash_rows = 0;
   need_full_board_repaint = 1;
   have_prev = 0;
-  if (!spawn_piece()) game_over = 1;
+  if (!spawn_piece()) { game_over = 1; game_state = STATE_GAMEOVER; }
   need_hud_refresh = 1;
   game_state = STATE_PLAY;
 }
+
+/* ================================================================
+   Game Over overlay + reinicio
+   ================================================================ */
+/* Pinta la pantalla de título sobre el tablero vacío */
+static void paint_title_screen(void)
+{
+  /* "TETRIS" centrado en el tablero (cols 1-10, 10 tiles ancho) */
+  screen_set(3, 5, char_to_tile('T'));
+  screen_set(4, 5, char_to_tile('E'));
+  screen_set(5, 5, char_to_tile('T'));
+  screen_set(6, 5, char_to_tile('R'));
+  screen_set(7, 5, char_to_tile('I'));
+  screen_set(8, 5, char_to_tile('S'));
+
+  /* "GG" debajo */
+  screen_set(5, 7, char_to_tile('G'));
+  screen_set(6, 7, char_to_tile('G'));
+
+  /* "PRESS" + "START" como indicación */
+  screen_set(3, 11, char_to_tile('P'));
+  screen_set(4, 11, char_to_tile('R'));
+  screen_set(5, 11, char_to_tile('E'));
+  screen_set(6, 11, char_to_tile('S'));
+  screen_set(7, 11, char_to_tile('S'));
+
+  screen_set(3, 13, char_to_tile('S'));
+  screen_set(4, 13, char_to_tile('T'));
+  screen_set(5, 13, char_to_tile('A'));
+  screen_set(6, 13, char_to_tile('R'));
+  screen_set(7, 13, char_to_tile('T'));
+}
+
+/* Overlay de pausa sobre el tablero */
+static void paint_pause_overlay(void)
+{
+  screen_set(3, 8, char_to_tile('P'));
+  screen_set(4, 8, char_to_tile('A'));
+  screen_set(5, 8, char_to_tile('U'));
+  screen_set(6, 8, char_to_tile('S'));
+  screen_set(7, 8, char_to_tile('E'));
+}
+
+static void paint_gameover_overlay(void)
+{
+  /* "GAME" centrado en fila 7, "OVER" en fila 9 del tablero */
+  screen_set(3, 7, char_to_tile('G'));
+  screen_set(4, 7, char_to_tile('A'));
+  screen_set(5, 7, char_to_tile('M'));
+  screen_set(6, 7, char_to_tile('E'));
+
+  screen_set(3, 9, char_to_tile('O'));
+  screen_set(4, 9, char_to_tile('V'));
+  screen_set(5, 9, char_to_tile('E'));
+  screen_set(6, 9, char_to_tile('R'));
+}
+
+static void reset_game(void);  /* forward decl */
 
 /* ================================================================
    Input
@@ -1110,8 +1185,6 @@ static void handle_input(void)
   unsigned int k = SMS_getKeysPressed();
   unsigned int h = SMS_getKeysStatus();
 
-  if (k && rng_state == 0xA5) rng_state = SMS_getVCount() | 1;
-
   if (h & PORT_A_KEY_LEFT) {
     if (das_counter_l == 0) {
       try_move(-1); das_counter_l = DAS_FRAMES;
@@ -1164,6 +1237,32 @@ static void handle_input(void)
 }
 
 /* ================================================================
+   Reset / reinicio completo del juego (sin reiniciar VRAM/tiles)
+   ================================================================ */
+static void reset_game(void)
+{
+  unsigned char x, y;
+  for (y = 0; y < BOARD_H; y++)
+    for (x = 0; x < BOARD_W; x++)
+      board[y][x] = 0;
+  score = 0; level = 0; lines = 0;
+  game_over = 0;
+  game_state = STATE_PLAY;
+  n_flash_rows = 0;
+  have_prev = 0;
+  invalidate_ghost_cache();
+  soft_dropping = 0;
+  das_counter_l = 0; das_counter_r = 0;
+  rot_cd_cw = 0; rot_cd_ccw = 0;
+  rng_seed();   /* re-sembrar en cada reinicio */
+  next_type = rand7();
+  spawn_piece();
+  fall_timer = fall_frames();
+  need_full_board_repaint = 1;
+  need_hud_refresh = 1;
+}
+
+/* ================================================================
    Main
    ================================================================ */
 void main(void)
@@ -1212,33 +1311,14 @@ void main(void)
   SMS_initSprites();
   SMS_copySpritestoSAT();
 
-  /* Modelo */
-  for (y = 0; y < BOARD_H; y++)
-    for (x = 0; x < BOARD_W; x++)
-      board[y][x] = 0;
-  score = 0; level = 0; lines = 0;
-  next_type = rand7();
-
   nt_init();
   paint_static_layout();
   paint_hud_labels();
-  paint_hud_numbers();
-
-  spawn_piece();
-  paint_next_preview();
-  {
-    signed char nb[4][2];
-    unsigned char i;
-    current_blocks(nb);
-    paint_piece_blocks(nb);
-    for (i = 0; i < 4; i++) { prev_blocks[i][0]=nb[i][0]; prev_blocks[i][1]=nb[i][1]; }
-    have_prev = 1;
-  }
+  paint_title_screen();
   nt_flush_all();
 
-  fall_timer = fall_frames();
-
-  music_start(korobeiniki);
+  game_state = STATE_TITLE;
+  psg_silence_all();
 
   SMS_displayOn();
 
@@ -1249,12 +1329,36 @@ void main(void)
     SMS_waitForVBlank();
     nt_flush();
 
-    if (game_state == STATE_PLAY) {
+    if (game_state == STATE_TITLE) {
+      /* Esperamos a que pulsen Button 1 o Button 2 para empezar */
+      {
+        unsigned int h = SMS_getKeysStatus();
+        if (h & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
+          reset_game();           /* arranca partida nueva */
+        }
+      }
+    } else if (game_state == STATE_PAUSE) {
+      paint_pause_overlay();
+      /* Start de GG reanuda (flanco: solo al pulsar, no al mantener) */
+      if (GG_START_PRESSED() && !start_was_pressed) {
+        game_state = STATE_PLAY;
+        need_full_board_repaint = 1;
+        invalidate_ghost_cache();
+      }
+      start_was_pressed = GG_START_PRESSED();
+    } else if (game_state == STATE_PLAY) {
       if (!game_over) {
-        handle_input();
-        if (--fall_timer == 0) {
-          fall_timer = fall_frames();
-          piece_step_down();
+        /* Start de GG pausa (flanco) */
+        if (GG_START_PRESSED() && !start_was_pressed) {
+          game_state = STATE_PAUSE;
+        }
+        start_was_pressed = GG_START_PRESSED();
+        if (game_state == STATE_PLAY) {
+          handle_input();
+          if (--fall_timer == 0) {
+            fall_timer = fall_frames();
+            piece_step_down();
+          }
         }
       }
 
@@ -1264,30 +1368,58 @@ void main(void)
         invalidate_ghost_cache();
       } else if (have_prev) {
         restore_prev_blocks();
-        restore_ghost_blocks();
       }
 
-      /* Ghost DESACTIVADO temporalmente para aislar problema de rendimiento */
-      #if 0
+      /* Ghost piece simplificado: borrar viejo + pintar nuevo solo
+         cuando la pieza cambia. Todo inline para claridad. */
       {
-        unsigned char ghost_changed = (cur_type != ghost_last_type ||
-                                       cur_rot  != ghost_last_rot  ||
-                                       cur_x    != ghost_last_x    ||
-                                       cur_y    != ghost_last_y);
-        if (ghost_changed) {
-          signed char gb[4][2];
-          ghost_blocks(gb);
-          paint_ghost_blocks(gb);
-          for (i = 0; i < 4; i++) { prev_ghost[i][0]=gb[i][0]; prev_ghost[i][1]=gb[i][1]; }
+        unsigned char gc = (cur_type != ghost_last_type ||
+                            cur_rot  != ghost_last_rot  ||
+                            cur_x    != ghost_last_x    ||
+                            cur_y    != ghost_last_y);
+        if (gc) {
+          signed char gy;
+          unsigned char lx, ly, gi;
+
+          /* Borrar ghost anterior */
+          if (ghost_last_type != 0xFF) {
+            for (gi = 0; gi < 4; gi++) {
+              if (prev_ghost[gi][0] >= 0 && prev_ghost[gi][0] < BOARD_W &&
+                  prev_ghost[gi][1] >= HIDDEN_H && prev_ghost[gi][1] < BOARD_H)
+                paint_board_cell((unsigned char)prev_ghost[gi][0],
+                                 (unsigned char)prev_ghost[gi][1]);
+            }
+          }
+
+          /* Calcular landing Y */
+          gy = landing_y();
+
+          /* Pintar nuevo ghost + guardar posiciones */
+          gi = 0;
+          for (ly = 0; ly < 4; ly++) {
+            for (lx = 0; lx < 4; lx++) {
+              if (shape_has(cur_type, cur_rot, lx, ly)) {
+                signed char gx = cur_x + (signed char)lx;
+                signed char gby = gy + (signed char)ly;
+                prev_ghost[gi][0] = gx;
+                prev_ghost[gi][1] = gby;
+                gi++;
+                /* Pintar si visible y celda vacía */
+                if (gx >= 0 && gx < BOARD_W && gby >= HIDDEN_H && gby < BOARD_H) {
+                  unsigned char sy = (unsigned char)(gby - HIDDEN_H);
+                  if (!board[gby][gx])
+                    screen_set(BOARD_X0 + (unsigned char)gx,
+                               BOARD_Y0 + sy, TILE_GHOST);
+                }
+              }
+            }
+          }
           ghost_last_type = cur_type;
           ghost_last_rot  = cur_rot;
           ghost_last_x    = cur_x;
           ghost_last_y    = cur_y;
-        } else {
-          paint_ghost_blocks(prev_ghost);
         }
       }
-      #endif
       current_blocks(new_blocks);
       paint_piece_blocks(new_blocks);
       for (i = 0; i < 4; i++) {
@@ -1296,10 +1428,6 @@ void main(void)
       }
       have_prev = 1;
     } else if (game_state == STATE_FLASH) {
-      /* Primera iteración tras entrar en flash: mostrar el tablero
-         con la pieza recién bloqueada. Después solo repintamos las
-         filas animadas. Durante esta fase NO procesamos input ni
-         avanzamos gravedad. */
       if (need_full_board_repaint) {
         paint_full_board();
         need_full_board_repaint = 0;
@@ -1307,6 +1435,21 @@ void main(void)
       paint_flash_rows();
       if (--flash_timer == 0) {
         finalize_line_clear();
+      }
+    } else if (game_state == STATE_GAMEOVER) {
+      /* Primer frame: pintar overlay GAME OVER sobre el tablero */
+      if (need_full_board_repaint) {
+        paint_full_board();
+        need_full_board_repaint = 0;
+      }
+      paint_gameover_overlay();
+
+      /* Pulsar cualquier botón para reiniciar */
+      {
+        unsigned int h = SMS_getKeysStatus();
+        if (h & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
+          reset_game();
+        }
       }
     }
 
@@ -1316,7 +1459,6 @@ void main(void)
       need_hud_refresh = 0;
     }
 
-    /* Avanzar reproductor de música un tick por frame */
     music_tick();
   }
 }

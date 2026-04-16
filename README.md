@@ -16,18 +16,23 @@ Así que esto no es una "herejía". Es lo que debería haber pasado cuando Sega 
 
 ## Estado
 
-Jugable. El motor está ahí y responde; lo que falta es el pulido de vitrina.
+Jugable de principio a fin.
 
-- **Gameplay**: 7 tetrominoes con rotación + wall-kick básico. Gravedad por nivel, line clear, game over (aún sin pantalla decente, de momento el juego se congela con dignidad).
-- **Input**: DAS/ARR a medida (la versión "tap responsivo") con rotación independiente y soft drop.
-- **HUD**: cápsulas crema con esquinas redondeadas en dark mode. SCORE, LEVEL, LINES y NEXT con preview de la pieza siguiente.
-- **Scoring NES**: 40 / 100 / 300 / 1200 × (nivel+1). Niveles suben cada 10 líneas y aceleran la gravedad con la tabla clásica.
-- **Animación de line clear**: parpadeo blanco/color de las filas antes del colapso. Pequeño pero satisface.
-- **Render**: shadow buffer del name table con tracking de celdas sucias y flush con presupuesto por frame. Cero flicker, incluso en animaciones grandes.
-- **Muros con ladrillos** (cols 0 y 11) con junta de mortero. Por si alguien quería que se notase que esto NO es monocromo.
-- **PSG**: primer esbozo del reproductor monofónico con el Korobéiniki ya transcrito. Faltan dos líneas para cablearlo al loop.
+- **Pantalla de título**: "TETRIS GG" + "PRESS START". Pulsa botón para empezar.
+- **Gameplay**: 7 tetrominoes con rotación + wall-kick básico. Gravedad por nivel, line clear, game over con reinicio.
+- **Input**: DAS/ARR (delay + auto-repeat) sin depender del edge flag del VBlank. Rotación con ambos botones (CW/CCW). Soft drop (↓) + hard drop (↑).
+- **Ghost piece**: outline blanco en la posición de aterrizaje. Solo se recalcula cuando la pieza cambia de posición.
+- **HUD**: cápsulas crema con esquinas redondeadas en dark mode. SCORE, LEVEL, LINES y NEXT con preview de la siguiente pieza.
+- **Scoring NES-style**: 40 / 100 / 300 / 1200 × (nivel+1). +1 por celda de soft drop, +2 por celda de hard drop.
+- **Niveles**: suben cada 10 líneas. Gravedad acelera de 0.5s/celda (nivel 0) a 1 celda/frame (nivel 19+).
+- **Animación de line clear**: parpadeo blanco/color de las filas antes del colapso.
+- **Pausa**: botón Start (Enter en Kega Fusion) pausa y reanuda.
+- **Game Over**: overlay "GAME OVER" al morir. Botón para reiniciar.
+- **Render**: shadow buffer del name table con dirty tracking y flush presupuestado (max 64 celdas/VBlank). Cero flicker.
+- **Muros con ladrillos**, piezas pseudo-3D con highlight/shadow, celda vacía con grid sutil.
+- **RNG**: xorshift 16-bit sembrado con VCount para secuencias distintas en cada partida.
 
-Pendiente: título, pausa, game over como debe ser, ghost piece, hard drop, SFX.
+Pendiente: música (buscando un PSG/VGM decente del Korobéiniki), SFX, arte distinto por pieza, high score en SRAM.
 
 ## Por qué existe
 
@@ -103,11 +108,12 @@ gearsystem ../ROM/tetrisgg.gg
 
 | Tecla GG       | Kega default | Acción                                          |
 |----------------|--------------|-------------------------------------------------|
-| D-pad ←/→      | Flechas      | Mover pieza (tap + auto-repeat)                 |
-| D-pad ↓        | ↓            | Soft drop                                       |
+| D-pad ←/→      | Flechas      | Mover pieza (tap + auto-repeat con DAS/ARR)     |
+| D-pad ↓        | ↓            | Soft drop (60 celdas/seg, +1 pt/celda)          |
+| D-pad ↑        | ↑            | Hard drop (instantáneo, +2 pts/celda)           |
 | Botón 1        | `A`          | Rotar CW                                        |
 | Botón 2        | `S`          | Rotar CCW                                       |
-| Start          | Enter        | _(pendiente: pausa / iniciar partida)_          |
+| Start          | Enter        | Iniciar partida / Pausar / Reanudar             |
 
 ## Detallitos técnicos que merecen acta
 

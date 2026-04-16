@@ -1,0 +1,56 @@
+CC=sdcc
+IHX2SMS=../devkitSMS/ihx2sms/Windows/ihx2sms.exe
+DEVKITSMS_BASE=../devkitSMS
+SMSLIB_BASE=$(DEVKITSMS_BASE)/SMSlib
+SMSLIB_INCDIR=$(SMSLIB_BASE)/src
+PEEP_RULES=$(SMSLIB_BASE)/src/peep-rules.txt
+CRT0=$(DEVKITSMS_BASE)/crt0/crt0_sms.rel
+SMSLIB_LIB=$(SMSLIB_BASE)/src/SMSlib_GG.lib
+
+CFLAGS=-mz80 -I$(SMSLIB_INCDIR) --peep-file $(PEEP_RULES) -DTARGET_GG
+LDFLAGS=-mz80 --no-std-crt0 --data-loc 0xC000
+
+BUILD_DIR=build
+ROM_DIR=../ROM
+PROGNAME=tetrisgg
+KEEP_ROMS=5
+
+OBJS=$(BUILD_DIR)/main_GG.rel
+
+all: $(ROM_DIR)/$(PROGNAME).gg
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(ROM_DIR):
+	mkdir -p $(ROM_DIR)
+
+$(BUILD_DIR)/%_GG.rel: %.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/$(PROGNAME).ihx: $(OBJS)
+	$(CC) -o $@ $(LDFLAGS) $(CRT0) $(SMSLIB_LIB) $^
+
+# Produce ROM/tetrisgg.gg (latest) + copia con timestamp.
+# Mantiene solo las $(KEEP_ROMS) más recientes en ROM/.
+$(ROM_DIR)/$(PROGNAME).gg: $(BUILD_DIR)/$(PROGNAME).ihx | $(ROM_DIR)
+	$(IHX2SMS) $< $@
+	@cp $@ $(ROM_DIR)/$(PROGNAME)_$$(date +%Y%m%d_%H%M%S).gg
+	@ls -t $(ROM_DIR)/$(PROGNAME)_*.gg 2>/dev/null | tail -n +$$(($(KEEP_ROMS)+1)) | xargs -r rm -f
+	@echo "ROMs en $(ROM_DIR)/:"
+	@ls -1 $(ROM_DIR)/$(PROGNAME)*.gg 2>/dev/null
+
+# Borra intermedios y la ROM "latest", conserva el histórico.
+clean:
+	rm -f $(BUILD_DIR)/*.rel $(BUILD_DIR)/*.ihx $(BUILD_DIR)/*.asm
+	rm -f $(BUILD_DIR)/*.sym $(BUILD_DIR)/*.lst $(BUILD_DIR)/*.noi
+	rm -f $(BUILD_DIR)/*.lk  $(BUILD_DIR)/*.map $(BUILD_DIR)/*.sms
+	rm -f $(ROM_DIR)/$(PROGNAME).gg
+
+# Borra también el histórico de ROMs.
+distclean: clean
+	rm -f $(ROM_DIR)/$(PROGNAME)_*.gg
+	-rmdir $(BUILD_DIR)
+	-rmdir $(ROM_DIR)
+
+.PHONY: all clean distclean $(BUILD_DIR)/$(PROGNAME).ihx

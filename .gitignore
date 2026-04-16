@@ -1,0 +1,18 @@
+# Dependencias externas clonadas aparte (ver README)
+devkitSMS/
+Gearsystem/
+
+# Intermedios del build de SDCC
+tetrisgg/build/
+*.rel
+*.ihx
+*.asm
+*.lst
+*.sym
+*.lk
+*.map
+*.noi
+
+# Archivos del sistema
+Thumbs.db
+.DS_Store

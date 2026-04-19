@@ -919,11 +919,12 @@ static void paint_full_board(void)
 /* ================================================================
    Tiempo, gravedad, puntuación
    ================================================================ */
-/* Frames por caída según nivel (tabla tipo NES Tetris aproximada) */
+/* Frames por caída según nivel — tabla fiel al Tetris de Game Boy
+   (21 niveles 0..20). A partir del 20 la gravedad no sube más. */
 static const unsigned char fall_table[] = {
-  30, 26, 22, 18, 15, 12, 10, 8, 6, 5,
-   4,  4,  3,  3,  3,  2,  2, 2, 2, 1,
-   1,  1,  1,  1,  1,  1,  1, 1, 1, 1
+  53, 49, 45, 41, 37, 33, 28, 22, 17, 11,
+  10,  9,  8,  7,  6,  6,  5,  5,  4,  4,
+   3
 };
 #define MAX_LEVEL ((sizeof(fall_table)/sizeof(fall_table[0])) - 1)
 
@@ -1342,11 +1343,11 @@ void main(void)
     nt_flush();
 
     if (game_state == STATE_TITLE) {
-      /* Esperamos a que pulsen Button 1 o Button 2 para empezar */
+      /* Button 1/2 arranca partida */
       {
-        unsigned int h = SMS_getKeysStatus();
-        if (h & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
-          reset_game();           /* arranca partida nueva */
+        unsigned int k = SMS_getKeysPressed();
+        if (k & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
+          reset_game();
         }
       }
     } else if (game_state == STATE_PAUSE) {

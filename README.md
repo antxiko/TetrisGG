@@ -28,11 +28,12 @@ Jugable de principio a fin.
 - **Animación de line clear**: parpadeo blanco/color de las filas antes del colapso.
 - **Pausa**: botón Start (Enter en Kega Fusion) pausa y reanuda.
 - **Game Over**: overlay "GAME OVER" al morir. Botón para reiniciar.
-- **Render**: shadow buffer del name table con dirty tracking y flush presupuestado (max 64 celdas/VBlank). Cero flicker.
+- **Render**: shadow buffer del name table con dirty tracking y flush presupuestado (max 64 celdas/VBlank). Cero flicker. Cache de pieza: solo se repinta cuando cambia de estado.
 - **Muros con ladrillos**, piezas pseudo-3D con highlight/shadow, celda vacía con grid sutil.
 - **RNG**: xorshift 16-bit sembrado con VCount para secuencias distintas en cada partida.
+- **Música**: tema **Underwater de Alex Kidd in Miracle World** (arreglado como VGM→PSG, multi-canal SN76489, 2:27 en loop). Reproducida vía `PSGlib` con `PSGFrame` registrado como handler del frame interrupt — la música corre en el ISR de VBlank y es inmune a los frame drops del main loop, que es como lo hacen los juegos comerciales.
 
-Pendiente: música (buscando un PSG/VGM decente del Korobéiniki), SFX, arte distinto por pieza, high score en SRAM.
+Pendiente: SFX (rotar, bloquear, line clear, tetris, game over), arte distinto por pieza, high score en SRAM, posible Korobéiniki propio cuando exista un PSG decente.
 
 ## Por qué existe
 
@@ -58,6 +59,7 @@ TETRISGG/
 │   ├── tetrisgg.gg                          Última build, la que cargas
 │   └── tetrisgg_YYYYMMDD_HHMMSS.gg          Histórico (últimas 5)
 ├── devkitSMS/          Toolchain (submódulo, se clona aparte)
+├── PSGlib/             Herramientas VGM→PSG + lib (submódulo, aparte)
 └── Gearsystem/         Emulador opcional (debug multiplataforma)
 ```
 
@@ -75,10 +77,12 @@ TETRISGG/
 git clone https://github.com/antxiko/TetrisGG.git
 cd TetrisGG
 git clone https://github.com/sverx/devkitSMS.git
+git clone https://github.com/sverx/PSGlib.git       # herramientas VGM→PSG
 
-# Rebuild único de SMSlib y crt0 para alinear con SDCC 4.5:
+# Rebuild único de SMSlib, crt0 y PSGlib para alinear con SDCC 4.5:
 cd devkitSMS/SMSlib/src && make && cd ../../..
 cd devkitSMS/crt0/src   && make && cd ../../..
+cd devkitSMS/PSGlib/src && make && cd ../../..
 ```
 
 > **Por qué el rebuild:** las libs precompiladas de devkitSMS fueron generadas con SDCC < 4.5. Desde la 4.5 el calling convention por defecto es `sdcccall(1)` y el linker se queja del desajuste. El rebuild local las compila con tu SDCC y deja de quejarse. Es cosa de una vez.

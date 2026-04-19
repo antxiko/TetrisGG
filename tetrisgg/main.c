@@ -218,6 +218,7 @@ static void vblank_isr(void);
 static unsigned char anim_tiles[8 * 32];
 static volatile unsigned char anim_frame_idx = 0;    /* escrito desde ISR */
 static volatile unsigned char anim_counter = 0;
+static volatile unsigned char anim_pending = 0;      /* 1 = main loop debe volcar tile */
 
 static void gen_anim_tiles(void)
 {
@@ -383,6 +384,8 @@ static const unsigned char font_tiles[] = {
 
 #define TILE_WHITE     51     /* sólido color 13 (blanco) para flash de líneas */
 #define TILE_GHOST     52     /* outline de celda para ghost piece             */
+#define TILE_STAR      53     /* estrellita para splash screen                 */
+#define TILE_MOON      54     /* luna para splash screen                       */
 
 /* ---------------- Generación en RAM de los 7 tiles de pieza -----
    Patrón uniforme "3D panel" para las 7 piezas: fila superior e
@@ -1090,33 +1093,82 @@ static void finalize_line_clear(void)
 /* ================================================================
    Game Over overlay + reinicio
    ================================================================ */
-/* Pinta la pantalla de título sobre el tablero vacío */
+/* Splash screen estilo GB Tetris adaptada a GG (sin Nintendo, obviamente).
+   Cielo nocturno con estrellas + luna + título + silueta del Kremlin
+   hecha con piezas de Tetris (meta-homenaje) + muralla de ladrillos. */
 static void paint_title_screen(void)
 {
-  /* "TETRIS" centrado en el tablero (cols 1-10, 10 tiles ancho) */
-  screen_set(3, 5, char_to_tile('T'));
-  screen_set(4, 5, char_to_tile('E'));
-  screen_set(5, 5, char_to_tile('T'));
-  screen_set(6, 5, char_to_tile('R'));
-  screen_set(7, 5, char_to_tile('I'));
-  screen_set(8, 5, char_to_tile('S'));
+  unsigned char x, y;
 
-  /* "GG" debajo */
-  screen_set(5, 7, char_to_tile('G'));
-  screen_set(6, 7, char_to_tile('G'));
+  /* Limpiar toda el área visible (20x18) con fondo oscuro */
+  for (y = 0; y < 18; y++)
+    for (x = 0; x < 20; x++)
+      screen_set(x, y, TILE_BG);
 
-  /* "PRESS" + "START" como indicación */
-  screen_set(3, 11, char_to_tile('P'));
-  screen_set(4, 11, char_to_tile('R'));
-  screen_set(5, 11, char_to_tile('E'));
-  screen_set(6, 11, char_to_tile('S'));
-  screen_set(7, 11, char_to_tile('S'));
+  /* --- Estrellas dispersas en el cielo --- */
+  screen_set(1, 1,  TILE_STAR);
+  screen_set(4, 2,  TILE_STAR);
+  screen_set(8, 1,  TILE_STAR);
+  screen_set(14, 2, TILE_STAR);
+  screen_set(18, 3, TILE_STAR);
+  screen_set(2, 4,  TILE_STAR);
+  screen_set(11, 4, TILE_STAR);
 
-  screen_set(3, 13, char_to_tile('S'));
-  screen_set(4, 13, char_to_tile('T'));
-  screen_set(5, 13, char_to_tile('A'));
-  screen_set(6, 13, char_to_tile('R'));
-  screen_set(7, 13, char_to_tile('T'));
+  /* --- Luna arriba-derecha --- */
+  screen_set(16, 1, TILE_MOON);
+
+  /* --- Logo TETRIS GG centrado --- */
+  screen_set(6,  6, char_to_tile('T'));
+  screen_set(7,  6, char_to_tile('E'));
+  screen_set(8,  6, char_to_tile('T'));
+  screen_set(9,  6, char_to_tile('R'));
+  screen_set(10, 6, char_to_tile('I'));
+  screen_set(11, 6, char_to_tile('S'));
+  screen_set(12, 6, char_to_tile('G'));
+  screen_set(13, 6, char_to_tile('G'));
+
+  /* --- Silueta del "Kremlin" hecha con piezas Tetris (cúpulas) --- */
+  /* Cúpula izquierda (morado) */
+  screen_set(4,  9, TILE_PIECE(PIECE_T));
+  screen_set(5,  9, TILE_PIECE(PIECE_T));
+  screen_set(4, 10, TILE_PIECE(PIECE_T));
+  screen_set(5, 10, TILE_PIECE(PIECE_T));
+  /* Cúpula central grande (amarillo) */
+  screen_set(9,  8, TILE_PIECE(PIECE_O));
+  screen_set(10, 8, TILE_PIECE(PIECE_O));
+  screen_set(9,  9, TILE_PIECE(PIECE_O));
+  screen_set(10, 9, TILE_PIECE(PIECE_O));
+  screen_set(9, 10, TILE_PIECE(PIECE_O));
+  screen_set(10,10, TILE_PIECE(PIECE_O));
+  /* Cúpula derecha (rojo) */
+  screen_set(14, 9, TILE_PIECE(PIECE_Z));
+  screen_set(15, 9, TILE_PIECE(PIECE_Z));
+  screen_set(14,10, TILE_PIECE(PIECE_Z));
+  screen_set(15,10, TILE_PIECE(PIECE_Z));
+
+  /* --- Muralla de ladrillos en la base --- */
+  for (x = 0; x < 20; x++) {
+    screen_set(x, 11, TILE_BRICK);
+    screen_set(x, 12, TILE_BRICK);
+  }
+
+  /* --- "PRESS START" (cream) --- */
+  screen_set(4, 14, char_to_tile('P'));
+  screen_set(5, 14, char_to_tile('R'));
+  screen_set(6, 14, char_to_tile('E'));
+  screen_set(7, 14, char_to_tile('S'));
+  screen_set(8, 14, char_to_tile('S'));
+  screen_set(10, 14, char_to_tile('S'));
+  screen_set(11, 14, char_to_tile('T'));
+  screen_set(12, 14, char_to_tile('A'));
+  screen_set(13, 14, char_to_tile('R'));
+  screen_set(14, 14, char_to_tile('T'));
+
+  /* --- Año --- */
+  screen_set(8,  16, TILE_DIGIT(2));
+  screen_set(9,  16, TILE_DIGIT(0));
+  screen_set(10, 16, TILE_DIGIT(2));
+  screen_set(11, 16, TILE_DIGIT(6));
 }
 
 /* Overlay de pausa sobre el tablero */
@@ -1295,23 +1347,28 @@ static void reset_game(void)
   next_type = rand7();
   spawn_piece();
   fall_timer = fall_frames();
+  /* Pintar layout del juego (marcos + panel + cápsulas) sobre lo
+     que hubiera (splash screen, game over screen, etc.) */
+  paint_static_layout();
+  paint_hud_labels();
   need_full_board_repaint = 1;
   need_hud_refresh = 1;
 }
 
 /* ================================================================
    Handler del VBlank IRQ: corre a 60Hz estable aunque el main loop
-   se atasque. Ejecuta PSGFrame (música) + avance de animación de
-   fondo (swap del tile TILE_EMPTY con la siguiente variante).
+   se atasque. Ejecuta PSGFrame (música, escribe solo al PSG) y
+   marca un flag para que el main loop vuelque el tile animado.
+   NUNCA escribe al VDP desde aquí: eso causaba race con nt_flush.
    ================================================================ */
-#define ANIM_SPEED 3    /* 60/3 = 20 Hz visual para el scroll diagonal */
+#define ANIM_SPEED 6    /* 60/6 = 10 Hz visual, más tolerante a frame drops */
 static void vblank_isr(void)
 {
   PSGFrame();
   if (++anim_counter >= ANIM_SPEED) {
     anim_counter = 0;
     anim_frame_idx = (unsigned char)((anim_frame_idx + 1) & 7);
-    SMS_loadTiles(&anim_tiles[anim_frame_idx * 32], TILE_EMPTY, 32);
+    anim_pending = 1;
   }
 }
 
@@ -1353,6 +1410,34 @@ void main(void)
     SMS_loadTiles(solid_paccent, TILE_PACCENT, sizeof(solid_paccent));
     SMS_loadTiles(solid_white,   TILE_WHITE,   sizeof(solid_white));
     SMS_loadTiles(ghost_tile,    TILE_GHOST,   sizeof(ghost_tile));
+
+    /* Tiles decorativos para la splash screen: cream sobre dark bg (color 0).
+       color 4 (0100): p0=0, p1=0, p2=1, p3=0
+       color 0 (0000): todos 0
+       Para bit B=1 (cream): plane0=0, plane1=0, plane2=B, plane3=0 */
+    #define DECO_ROW(m) 0x00, 0x00, (unsigned char)(m), 0x00
+    static const unsigned char star_tile[32] = {
+      DECO_ROW(0x00),
+      DECO_ROW(0x00),
+      DECO_ROW(0x08),    /*     #     */
+      DECO_ROW(0x1C),    /*    ###    */
+      DECO_ROW(0x08),    /*     #     */
+      DECO_ROW(0x00),
+      DECO_ROW(0x00),
+      DECO_ROW(0x00)
+    };
+    static const unsigned char moon_tile[32] = {
+      DECO_ROW(0x3C),    /*   ####    */
+      DECO_ROW(0x7E),    /*  ######   */
+      DECO_ROW(0xFF),    /* ######### */
+      DECO_ROW(0xFF),
+      DECO_ROW(0xFF),
+      DECO_ROW(0xFF),
+      DECO_ROW(0x7E),
+      DECO_ROW(0x3C)
+    };
+    SMS_loadTiles(star_tile, TILE_STAR, sizeof(star_tile));
+    SMS_loadTiles(moon_tile, TILE_MOON, sizeof(moon_tile));
   }
 
   /* Tiles 5..11: piezas 3D generadas en RAM */
@@ -1368,8 +1453,6 @@ void main(void)
   SMS_copySpritestoSAT();
 
   nt_init();
-  paint_static_layout();
-  paint_hud_labels();
   paint_title_screen();
   nt_flush_all();
 
@@ -1389,14 +1472,23 @@ void main(void)
     unsigned char i;
 
     SMS_waitForVBlank();
-    /* PSGFrame + animación de fondo corren en el ISR (vblank_isr) */
+    /* PSGFrame corre en el ISR. La anim de fondo marca flag desde el
+       ISR y volcamos el tile aquí, en el main loop, para evitar el
+       race con nt_flush sobre el VDP. */
+    if (anim_pending) {
+      SMS_loadTiles(&anim_tiles[anim_frame_idx * 32], TILE_EMPTY, 32);
+      anim_pending = 0;
+    }
     nt_flush();
 
     if (game_state == STATE_TITLE) {
-      /* Button 1/2 arranca partida */
+      /* Start (o Button 1/2) arranca partida */
       {
         unsigned int k = SMS_getKeysPressed();
-        if (k & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
+        unsigned char start_now = GG_START_PRESSED();
+        unsigned char start_edge = (start_now && !start_was_pressed);
+        start_was_pressed = start_now;
+        if ((k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || start_edge) {
           reset_game();
         }
       }
@@ -1528,16 +1620,21 @@ void main(void)
       }
       paint_gameover_overlay();
 
-      /* Pulsar cualquier botón para reiniciar */
+      /* Cualquier botón (A/B/Start) vuelve al menú principal */
       {
-        unsigned int h = SMS_getKeysStatus();
-        if (h & (PORT_A_KEY_1 | PORT_A_KEY_2)) {
-          reset_game();
+        unsigned int k = SMS_getKeysPressed();
+        unsigned char start_now = GG_START_PRESSED();
+        unsigned char start_edge = (start_now && !start_was_pressed);
+        start_was_pressed = start_now;
+        if ((k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || start_edge) {
+          paint_title_screen();
+          game_state = STATE_TITLE;
         }
       }
     }
 
-    if (need_hud_refresh) {
+    /* HUD solo en estados de juego (no en TITLE) */
+    if (need_hud_refresh && game_state != STATE_TITLE) {
       paint_hud_numbers();
       paint_next_preview();
       need_hud_refresh = 0;

@@ -200,10 +200,41 @@ static const unsigned char brick_tile[32] = {
   BR(0x00)                               /* junta horizontal */
 };
 
-/* ---------------- Tile de celda vacía con cuadrícula sutil ------
-   Color 2 (celda) con algún pixel en color 0 (fondo) para dar un
-   punto de rejilla. Color 2 = 0010: p0=0, p1=1, p2=0, p3=0.
-   Color 0 = 0000: todos 0. */
+/* ISR de VBlank: corre a 60Hz estable independiente del main loop.
+   Hace música (PSGFrame) + animación de fondo (swap del tile TILE_EMPTY).
+   Declaración forward porque se referencia antes de su definición. */
+static void vblank_isr(void);
+
+/* ---------------- Tiles animados del fondo del tablero ----------
+   Pre-generamos 8 variantes del tile TILE_EMPTY, cada una con la
+   diagonal `/` desplazada una posición. Cada N frames volcamos la
+   siguiente a VRAM → todas las celdas vacías del tablero se animan
+   a la vez sin tocar el tilemap.
+
+   Base: color 2 (azul oscuro). Acento: color 14 (marrón mortero).
+   Color 2 (0010): planes p0=0, p1=1, p2=0, p3=0
+   Color 14 (1110): planes p0=0, p1=1, p2=1, p3=1
+   Para pixel en diagonal (bit 1): planes 0, 0xFF, bit_mask, bit_mask */
+static unsigned char anim_tiles[8 * 32];
+static volatile unsigned char anim_frame_idx = 0;    /* escrito desde ISR */
+static volatile unsigned char anim_counter = 0;
+
+static void gen_anim_tiles(void)
+{
+  unsigned char frame, row;
+  for (frame = 0; frame < 8; frame++) {
+    for (row = 0; row < 8; row++) {
+      unsigned char bits = (unsigned char)(1 << ((row - frame) & 7));
+      unsigned char *p = &anim_tiles[frame * 32 + row * 4];
+      p[0] = 0x00;
+      p[1] = 0xFF;
+      p[2] = bits;
+      p[3] = bits;
+    }
+  }
+}
+
+/* Tile vacío legacy (grid sutil) - lo mantenemos por si queremos volver */
 #define EMPTY_ROW(mask) 0x00, (unsigned char)~(mask), 0x00, 0x00
 static const unsigned char empty_board_tile[32] = {
   EMPTY_ROW(0xFF),                       /* fila 0: completamente color 2 */
@@ -1269,6 +1300,22 @@ static void reset_game(void)
 }
 
 /* ================================================================
+   Handler del VBlank IRQ: corre a 60Hz estable aunque el main loop
+   se atasque. Ejecuta PSGFrame (música) + avance de animación de
+   fondo (swap del tile TILE_EMPTY con la siguiente variante).
+   ================================================================ */
+#define ANIM_SPEED 3    /* 60/3 = 20 Hz visual para el scroll diagonal */
+static void vblank_isr(void)
+{
+  PSGFrame();
+  if (++anim_counter >= ANIM_SPEED) {
+    anim_counter = 0;
+    anim_frame_idx = (unsigned char)((anim_frame_idx + 1) & 7);
+    SMS_loadTiles(&anim_tiles[anim_frame_idx * 32], TILE_EMPTY, 32);
+  }
+}
+
+/* ================================================================
    Main
    ================================================================ */
 void main(void)
@@ -1282,7 +1329,10 @@ void main(void)
 
   /* Tile 1 = ladrillo, 2 = celda vacía, 3 = panel, 4 = panel accent */
   SMS_loadTiles(brick_tile, TILE_BRICK, sizeof(brick_tile));
-  SMS_loadTiles(empty_board_tile, TILE_EMPTY, sizeof(empty_board_tile));
+  /* Generar tiles animados de fondo y cargar el frame 0 */
+  gen_anim_tiles();
+  SMS_loadTiles(&anim_tiles[0], TILE_EMPTY, 32);
+  (void)empty_board_tile;   /* legacy, no usado */
   {
     static const unsigned char solid_panel[32]   = { SOLID_COLOR(3) };
     static const unsigned char solid_paccent[32] = { SOLID_COLOR(4) };
@@ -1330,7 +1380,7 @@ void main(void)
      Registramos PSGFrame como handler del VBlank ISR: la música suena a
      60Hz estable sin depender de la velocidad del main loop. */
   PSGPlay(underwater_psg);
-  SMS_setFrameInterruptHandler(PSGFrame);
+  SMS_setFrameInterruptHandler(vblank_isr);   /* música + anim fondo a 60Hz */
 
   SMS_displayOn();
 
@@ -1339,7 +1389,7 @@ void main(void)
     unsigned char i;
 
     SMS_waitForVBlank();
-    /* PSGFrame ya corre en el ISR via SMS_setFrameInterruptHandler */
+    /* PSGFrame + animación de fondo corren en el ISR (vblank_isr) */
     nt_flush();
 
     if (game_state == STATE_TITLE) {

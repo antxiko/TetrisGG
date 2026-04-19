@@ -6,8 +6,11 @@ SMSLIB_INCDIR=$(SMSLIB_BASE)/src
 PEEP_RULES=$(SMSLIB_BASE)/src/peep-rules.txt
 CRT0=$(DEVKITSMS_BASE)/crt0/crt0_sms.rel
 SMSLIB_LIB=$(SMSLIB_BASE)/src/SMSlib_GG.lib
+PSGLIB_BASE=$(DEVKITSMS_BASE)/PSGlib
+PSGLIB_INCDIR=$(PSGLIB_BASE)/src
+PSGLIB_LIB=$(PSGLIB_BASE)/src/PSGlib.lib
 
-CFLAGS=-mz80 -I$(SMSLIB_INCDIR) --peep-file $(PEEP_RULES) -DTARGET_GG
+CFLAGS=-mz80 -I$(SMSLIB_INCDIR) -I$(PSGLIB_INCDIR) --peep-file $(PEEP_RULES) -DTARGET_GG
 LDFLAGS=-mz80 --no-std-crt0 --data-loc 0xC000
 
 BUILD_DIR=build
@@ -29,7 +32,7 @@ $(BUILD_DIR)/%_GG.rel: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(PROGNAME).ihx: $(OBJS)
-	$(CC) -o $@ $(LDFLAGS) $(CRT0) $(SMSLIB_LIB) $^
+	$(CC) -o $@ $(LDFLAGS) $(CRT0) $(SMSLIB_LIB) $(PSGLIB_LIB) $^
 
 # Produce ROM/tetrisgg.gg (latest) + copia con timestamp.
 # Mantiene solo las $(KEEP_ROMS) más recientes en ROM/.

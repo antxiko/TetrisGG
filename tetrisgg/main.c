@@ -1,4 +1,5 @@
 #include "SMSlib.h"
+#include "PSGlib.h"
 
 /* ================================================================
    PSG directo (puerto $7F) - reproductor de música monofónico
@@ -1236,6 +1237,10 @@ static void handle_input(void)
   }
 }
 
+/* Datos PSG incluidos aquí (después del código) para que SDCC los
+   coloque en el segmento CODE de ROM y no en INITIALIZED (RAM). */
+#include "underwater_psg.h"
+
 /* ================================================================
    Reset / reinicio completo del juego (sin reiniciar VRAM/tiles)
    ================================================================ */
@@ -1320,6 +1325,12 @@ void main(void)
   game_state = STATE_TITLE;
   psg_silence_all();
 
+  /* Música: Alex Kidd in Miracle World - Underwater (SN76489 puro, 2:27).
+     Registramos PSGFrame como handler del VBlank ISR: la música suena a
+     60Hz estable sin depender de la velocidad del main loop. */
+  PSGPlay(underwater_psg);
+  SMS_setFrameInterruptHandler(PSGFrame);
+
   SMS_displayOn();
 
   for (;;) {
@@ -1327,6 +1338,7 @@ void main(void)
     unsigned char i;
 
     SMS_waitForVBlank();
+    /* PSGFrame ya corre en el ISR via SMS_setFrameInterruptHandler */
     nt_flush();
 
     if (game_state == STATE_TITLE) {
@@ -1362,21 +1374,42 @@ void main(void)
         }
       }
 
-      if (need_full_board_repaint) {
-        paint_full_board();
-        need_full_board_repaint = 0;
-        invalidate_ghost_cache();
-      } else if (have_prev) {
-        restore_prev_blocks();
+      /* Cache de pieza: solo re-renderizar si realmente cambió */
+      {
+        static unsigned char piece_last_type = 0xFF;
+        static unsigned char piece_last_rot  = 0xFF;
+        static signed char   piece_last_x    = -100;
+        static signed char   piece_last_y    = -100;
+        unsigned char piece_moved = (cur_type != piece_last_type ||
+                                     cur_rot  != piece_last_rot  ||
+                                     cur_x    != piece_last_x    ||
+                                     cur_y    != piece_last_y);
+
+        if (need_full_board_repaint) {
+          paint_full_board();
+          need_full_board_repaint = 0;
+          invalidate_ghost_cache();
+          piece_last_type = 0xFF;
+          piece_moved = 1;
+        } else if (piece_moved && have_prev) {
+          restore_prev_blocks();
+        }
+
+        piece_last_type = cur_type;
+        piece_last_rot  = cur_rot;
+        piece_last_x    = cur_x;
+        piece_last_y    = cur_y;
+
+        if (!piece_moved) goto skip_piece_render;
       }
 
-      /* Ghost piece simplificado: borrar viejo + pintar nuevo solo
-         cuando la pieza cambia. Todo inline para claridad. */
+      /* Ghost piece: solo depende de tipo/rotación/columna (NO de cur_y).
+         Al caer por gravedad no hace falta recalcular landing_y. Esto
+         ahorra landing_y() en todos los frames de soft drop (60/seg). */
       {
         unsigned char gc = (cur_type != ghost_last_type ||
                             cur_rot  != ghost_last_rot  ||
-                            cur_x    != ghost_last_x    ||
-                            cur_y    != ghost_last_y);
+                            cur_x    != ghost_last_x);
         if (gc) {
           signed char gy;
           unsigned char lx, ly, gi;
@@ -1417,7 +1450,6 @@ void main(void)
           ghost_last_type = cur_type;
           ghost_last_rot  = cur_rot;
           ghost_last_x    = cur_x;
-          ghost_last_y    = cur_y;
         }
       }
       current_blocks(new_blocks);
@@ -1427,6 +1459,7 @@ void main(void)
         prev_blocks[i][1] = new_blocks[i][1];
       }
       have_prev = 1;
+    skip_piece_render: ;
     } else if (game_state == STATE_FLASH) {
       if (need_full_board_repaint) {
         paint_full_board();
@@ -1459,7 +1492,6 @@ void main(void)
       need_hud_refresh = 0;
     }
 
-    music_tick();
   }
 }
 

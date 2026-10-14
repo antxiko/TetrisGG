@@ -17,6 +17,8 @@ __sfr __at 0x7F PSG_port;
 #define C3   3
 #define D3   5
 #define E3   7
+#define FS3  9
+#define G3   10
 #define E4   19
 #define G4   22
 #define GS4  23
@@ -24,8 +26,10 @@ __sfr __at 0x7F PSG_port;
 #define B4   26
 #define C5   27
 #define D5   29
+#define DS5  30
 #define E5   31
 #define F5   32
+#define FS5  33
 #define G5   34
 #define GS5  35
 #define A5   36
@@ -111,7 +115,65 @@ static const unsigned char k_har[] = { HAR_A, HAR_A, HAR_B, LOOP };
 static const unsigned char k_bas[] = { BAS_A, BAS_A, BAS_B, LOOP };
 static const unsigned char k_drm[] = { DR_A,  DR_A,  DR_B,  LOOP };
 
+/* ---------------- Kalinka (Larionov, 1860) - música del título ----
+   Melodía según "Singing Together" (BBC, 1975), subida una octava.
+   Armonía, bajo y percusión: arreglo propio. 2/4, unidad =
+   semicorchea (8 por compás). Estribillo rápido y luego la estrofa. */
+#define KC_A  A5,4, FS5,2, G5,2          /* "ka-lin-ka"               */
+#define KC_B  A5,4, G5,2, FS5,2          /* "ka-lin-ka mo-"           */
+#define KC_C  A5,3, G5,1, FS5,2, G5,2
+#define KAL_PHRASE1 KC_A, KC_A, KC_B, E5,4, B5,4
+#define KAL_PHRASE2 KC_C, KC_A, KC_B
+#define KAL_MEL_CHORUS \
+  B5,4, B5,4, \
+  KAL_PHRASE1, KAL_PHRASE2, E5,4, B5,4, \
+  KAL_PHRASE1, KAL_PHRASE2, E5,8
+#define KV_TURN  B5,2, D6,2, C6,2, B5,1
+#define KAL_MEL_VERSE \
+  E6,8,  D6,8,  KV_TURN, G5,1,  G5,4, D5,4, \
+  KV_TURN, A5,1,  G5,4, D5,4,  D5,4, E5,2, FS5,2, \
+  A5,2, G5,2, FS5,2, E5,2,  D5,4, D6,4,  D6,8, \
+  KV_TURN, A5,1,  G5,4, E5,4,  KV_TURN, A5,1,  G5,4, D5,4, \
+  E5,4, E5,2, FS5,2,  A5,2, G5,2, FS5,2, E5,2,  D6,4, C6,4,  B5,8
+
+/* Armonía: una nota del acorde por compás, por debajo de la melodía */
+#define KH_B7  DS5,8
+#define KAL_HAR_CHORUS \
+  KH_B7, \
+  KH_B7, KH_B7, KH_B7, G4,8, KH_B7, KH_B7, KH_B7, G4,8, \
+  KH_B7, KH_B7, KH_B7, G4,8, KH_B7, KH_B7, KH_B7, G4,8
+#define KAL_HAR_VERSE \
+  G5,8, FS5,8, D5,8, B4,8, D5,8, B4,8, A4,8, C5,8, A4,4, FS5,4, FS5,8, \
+  D5,8, B4,8, D5,8, B4,8, B4,8, C5,8, FS5,8, D5,8
+
+/* Bajo "um-pa": fundamental y quinta en negras */
+#define KB_B7  B2,4, FS3,4
+#define KB_EM  E3,4, B2,4
+#define KB_D   D3,4, A2,4
+#define KB_G   G3,4, D3,4
+#define KAL_BAS_CHORUS \
+  KB_B7, \
+  KB_B7, KB_B7, KB_B7, KB_EM, KB_B7, KB_B7, KB_B7, KB_EM, \
+  KB_B7, KB_B7, KB_B7, KB_EM, KB_B7, KB_B7, KB_B7, KB_EM
+#define KAL_BAS_VERSE \
+  KB_EM, KB_D, KB_G, KB_G, KB_G, KB_G, KB_D, KB_D, KB_D, KB_D, \
+  KB_G, KB_EM, KB_G, KB_G, KB_EM, KB_D, KB_D, KB_G
+
+/* Percusión: estribillo con caja en la parte 2; estrofa solo charles */
+#define KD_C  HAT,2, HAT,2, SNR,2, HAT,2
+#define KD_V  HAT,4, HAT,4
+#define KD_C4 KD_C, KD_C, KD_C, KD_C
+#define KD_V6 KD_V, KD_V, KD_V, KD_V, KD_V, KD_V
+#define KAL_DRM_CHORUS KD_C, KD_C4, KD_C4, KD_C4, KD_C4
+#define KAL_DRM_VERSE  KD_V6, KD_V6, KD_V6
+
+static const unsigned char t_mel[] = { KAL_MEL_CHORUS, KAL_MEL_VERSE, LOOP };
+static const unsigned char t_har[] = { KAL_HAR_CHORUS, KAL_HAR_VERSE, LOOP };
+static const unsigned char t_bas[] = { KAL_BAS_CHORUS, KAL_BAS_VERSE, LOOP };
+static const unsigned char t_drm[] = { KAL_DRM_CHORUS, KAL_DRM_VERSE, LOOP };
+
 static const unsigned char * const k_streams[4] = { k_mel, k_har, k_bas, k_drm };
+static const unsigned char * const t_streams[4] = { t_mel, t_har, t_bas, t_drm };
 
 /* Instrumentos de los canales tonales: atenuación inicial, frames por
    paso de decaimiento, atenuación mínima a la que decae, y frames de
@@ -125,8 +187,9 @@ static const unsigned char inst_gate[4]  = { 2, 2, 4, 0 };
 static const unsigned char drum_ctrl[3] = { 0, 0x04, 0x05 };
 static const unsigned char drum_vol0[3] = { 15, 11, 6 };
 
-#define FPE_NORMAL 12     /* frames por corchea: 150 BPM */
-#define FPE_DANGER  9     /* pila alta: 200 BPM          */
+#define FPE_NORMAL 12     /* Korobeiniki: frames por corchea, 150 BPM */
+#define FPE_DANGER  9     /* pila alta: 200 BPM                       */
+#define FPE_TITLE   6     /* Kalinka: frames por semicorchea, 150 BPM */
 
 static const unsigned char *ch_ptr[4];
 static unsigned char ch_left[4];      /* corcheas que le quedan a la nota */
@@ -139,6 +202,8 @@ static unsigned char ch_floor[4];
 static volatile unsigned char m_on = 0;
 static volatile unsigned char m_paused = 0;
 static volatile unsigned char m_fpe = FPE_NORMAL;
+static const unsigned char * const *m_streams = k_streams;
+static unsigned char m_is_game = 0;   /* el modo peligro solo afecta a la partida */
 static unsigned char m_frame;
 
 /* ---------------- SFX ------------------------------------------
@@ -185,7 +250,7 @@ static void fetch(unsigned char i)
 {
   unsigned char n = *ch_ptr[i];
   if (n == LOOP) {
-    ch_ptr[i] = k_streams[i];
+    ch_ptr[i] = m_streams[i];
     n = *ch_ptr[i];
   }
   ch_ptr[i]++;
@@ -206,12 +271,16 @@ static void fetch(unsigned char i)
   }
 }
 
-void music_play_game(void)
+static void music_play(const unsigned char * const *streams,
+                       unsigned char fpe, unsigned char is_game)
 {
   unsigned char i;
   m_on = 0;
+  m_streams = streams;
+  m_is_game = is_game;
+  m_fpe     = fpe;
   for (i = 0; i < 4; i++) {
-    ch_ptr[i]  = k_streams[i];
+    ch_ptr[i]  = streams[i];
     ch_left[i] = 1;
     ch_note[i] = R;
     ch_vol[i]  = 15;
@@ -220,6 +289,9 @@ void music_play_game(void)
   m_paused = 0;
   m_on = 1;
 }
+
+void music_play_game(void)  { music_play(k_streams, FPE_NORMAL, 1); }
+void music_play_title(void) { music_play(t_streams, FPE_TITLE,  0); }
 
 void music_stop(void)
 {
@@ -240,7 +312,7 @@ void music_set_paused(unsigned char paused)
 
 void music_set_danger(unsigned char danger)
 {
-  m_fpe = danger ? FPE_DANGER : FPE_NORMAL;
+  if (m_is_game) m_fpe = danger ? FPE_DANGER : FPE_NORMAL;
 }
 
 void sfx_play(unsigned char id)

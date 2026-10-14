@@ -191,10 +191,13 @@ def _stream_eighths(name):
     return sum(int(d) for d in durs)
 
 
-def test_los_cuatro_canales_de_korobeiniki_duran_lo_mismo():
-    largos = {n: _stream_eighths(n) for n in ("k_mel", "k_har", "k_bas", "k_drm")}
-    # A A B = 24 compases de 8 corcheas
-    assert set(largos.values()) == {24 * 8}, largos
+@pytest.mark.parametrize("prefijo, unidades", [
+    ("k", 24 * 8),   # Korobeiniki: A A B = 24 compases de 8 corcheas
+    ("t", 35 * 8),   # Kalinka: 17 compases de estribillo + 18 de estrofa, en semicorcheas
+])
+def test_los_cuatro_canales_de_cada_cancion_duran_lo_mismo(prefijo, unidades):
+    largos = {n: _stream_eighths(f"{prefijo}_{n}") for n in ("mel", "har", "bas", "drm")}
+    assert set(largos.values()) == {unidades}, largos
 
 
 def test_notas_de_la_musica_dentro_de_la_tabla():

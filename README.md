@@ -30,10 +30,13 @@ Jugable de principio a fin.
 - **Game Over**: overlay "GAME OVER" al morir. Botón para reiniciar.
 - **Render**: shadow buffer del name table con dirty tracking y flush presupuestado (max 64 celdas/VBlank). Cero flicker. Cache de pieza: solo se repinta cuando cambia de estado.
 - **Muros con ladrillos**, piezas pseudo-3D con highlight/shadow, celda vacía con grid sutil.
-- **RNG**: xorshift 16-bit sembrado con VCount para secuencias distintas en cada partida.
-- **Música**: tema **Underwater de Alex Kidd in Miracle World** (arreglado como VGM→PSG, multi-canal SN76489, 2:27 en loop). Reproducida vía `PSGlib` con `PSGFrame` registrado como handler del frame interrupt — la música corre en el ISR de VBlank y es inmune a los frame drops del main loop, que es como lo hacen los juegos comerciales.
+- **RNG**: bolsa de 7 piezas sobre xorshift 16-bit, sembrado con el contador de frames de la ISR.
+- **Rotación**: SRS con tablas de kicks oficiales, lock delay (30 frames, 15 reinicios), T-spin y mini (regla de 3 esquinas), back-to-back.
+- **Música**: motor propio de 4 canales (`music.c`) en el ISR de VBlank, inmune a los frame drops del main loop. Título: **Kalinka** (Larionov, 1860). Partida: **Korobeiniki**, que acelera con la pila alta. Ambas de dominio público, arreglos propios. SFX para rotar, fijar, líneas, tetris, T-spin, nivel, pausa y game over.
+- **Fuente**: AccessDenied Mono en tonos azules, convertida con `tools/gen_font.py` → `tetrisgg/font_tiles.h`.
+- **Tests**: `python -m pytest -q tests` valida formas/kicks SRS, T-spins y la sincronía de los canales de música.
 
-Pendiente: SFX (rotar, bloquear, line clear, tetris, game over), arte distinto por pieza, high score en SRAM, posible Korobéiniki propio cuando exista un PSG decente.
+Pendiente: arte distinto por pieza, high score en SRAM.
 
 ## Por qué existe
 

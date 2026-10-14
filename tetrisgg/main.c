@@ -1,5 +1,4 @@
 #include "SMSlib.h"
-#include "PSGlib.h"
 
 #include "music.h"
 
@@ -27,7 +26,7 @@ static const unsigned int bg_palette[16] = {
   RGBHTML(0x200020),  /* 12 pieza shadow (casi negro púrpura) */
   RGBHTML(0xffffff),  /* 13 pieza highlight (blanco)   */
   RGBHTML(0x8a6b1f),  /* 14 ladrillo oscuro / mortero  */
-  RGBHTML(0x000000)   /* 15 negro (bordes)             */
+  RGBHTML(0x8ad0ff)   /* 15 azul claro (texto, arriba)  */
 };
 
 /* ---------------- Helpers para generar bytes de tiles 4bpp ------- */
@@ -65,7 +64,7 @@ static const unsigned char brick_tile[32] = {
 };
 
 /* ISR de VBlank: corre a 60Hz estable independiente del main loop.
-   Hace música (PSGFrame) + animación de fondo (swap del tile TILE_EMPTY).
+   Hace música (music_frame) + animación de fondo (swap del tile TILE_EMPTY).
    Declaración forward porque se referencia antes de su definición. */
 static void vblank_isr(void);
 
@@ -112,82 +111,29 @@ static const unsigned char static_tiles[] = {
   SOLID_COLOR(0),                        /* 0: fondo */
 };
 
-/* ---------------- Fuente 5x7 en 8x8 (texto color 4 sobre panel 3)
-   Macro TXT_ROW(bits): bits=1 por pixel de texto, 0 por bg.
-   color 4 (0100): p0=0, p1=0, p2=1, p3=0
-   color 3 (0011): p0=1, p1=1, p2=0, p3=0
-   Para pixel T=1(texto): planes 0,0,1,0
-       pixel T=0(bg):     planes 1,1,0,0
-   => p0 = ~T, p1 = ~T, p2 = T, p3 = 0                           */
+/* ---------------- Fuente: AccessDenied Mono (PNG) en tonos azules.
+   Los tiles salen de tools/gen_font.py -> font_tiles.h:
+     font_normal   : 0-9, A-Z, '-'  sobre panel (color 3), degradado
+                     azul claro (15) arriba -> azul (10) abajo
+     font_inverted : A-Z dentro de las cápsulas, sobre crema (4),
+                     azul (10) arriba -> marino (0) abajo            */
+#include "font_tiles.h"
+
+/* Tapas redondeadas de las cápsulas: bit 1 = crema (color 4), bit 0 =
+   panel (color 3). color 4: p2=1; color 3: p0=p1=1.                  */
 #define TXT_ROW(b) ((unsigned char)~(b)), ((unsigned char)~(b)), (unsigned char)(b), 0x00
 #define TXT_TILE(r0,r1,r2,r3,r4,r5,r6,r7) \
   TXT_ROW(r0), TXT_ROW(r1), TXT_ROW(r2), TXT_ROW(r3), \
   TXT_ROW(r4), TXT_ROW(r5), TXT_ROW(r6), TXT_ROW(r7)
-
-/* Fuente invertida: texto OSCURO (color 3 = panel dark) sobre fondo
-   CREMA (color 4). Para dibujar texto DENTRO de las cápsulas del HUD.
-   Para bit T=1(texto oscuro): planes 1,1,0,0
-   Para bit T=0(bg cream):    planes 0,0,1,0
-   => p0 = T, p1 = T, p2 = ~T, p3 = 0 */
-#define INV_ROW(b) (unsigned char)(b), (unsigned char)(b), ((unsigned char)~(b)), 0x00
-#define INV_TILE(r0,r1,r2,r3,r4,r5,r6,r7) \
-  INV_ROW(r0), INV_ROW(r1), INV_ROW(r2), INV_ROW(r3), \
-  INV_ROW(r4), INV_ROW(r5), INV_ROW(r6), INV_ROW(r7)
-
-static const unsigned char font_tiles[] = {
-  /* Dígitos 0..9 (se cargan en tiles 12..21) */
-  /* 0 */ TXT_TILE(0x00,0x70,0x88,0x98,0xA8,0xC8,0x88,0x70),
-  /* 1 */ TXT_TILE(0x00,0x20,0x60,0x20,0x20,0x20,0x20,0x70),
-  /* 2 */ TXT_TILE(0x00,0x70,0x88,0x08,0x10,0x20,0x40,0xF8),
-  /* 3 */ TXT_TILE(0x00,0x70,0x88,0x08,0x30,0x08,0x88,0x70),
-  /* 4 */ TXT_TILE(0x00,0x10,0x30,0x50,0x90,0xF8,0x10,0x10),
-  /* 5 */ TXT_TILE(0x00,0xF8,0x80,0xF0,0x08,0x08,0x88,0x70),
-  /* 6 */ TXT_TILE(0x00,0x30,0x40,0x80,0xF0,0x88,0x88,0x70),
-  /* 7 */ TXT_TILE(0x00,0xF8,0x08,0x10,0x20,0x40,0x80,0x80),
-  /* 8 */ TXT_TILE(0x00,0x70,0x88,0x88,0x70,0x88,0x88,0x70),
-  /* 9 */ TXT_TILE(0x00,0x70,0x88,0x88,0x78,0x08,0x10,0x60),
-
-  /* Letras: S C O R E L V I N X T (tiles 22..32) */
-  /* S */ TXT_TILE(0x00,0x78,0x80,0x80,0x70,0x08,0x08,0xF0),
-  /* C */ TXT_TILE(0x00,0x78,0x80,0x80,0x80,0x80,0x80,0x78),
-  /* O */ TXT_TILE(0x00,0x70,0x88,0x88,0x88,0x88,0x88,0x70),
-  /* R */ TXT_TILE(0x00,0xF0,0x88,0x88,0xF0,0xA0,0x90,0x88),
-  /* E */ TXT_TILE(0x00,0xF8,0x80,0x80,0xF0,0x80,0x80,0xF8),
-  /* L */ TXT_TILE(0x00,0x80,0x80,0x80,0x80,0x80,0x80,0xF8),
-  /* V */ TXT_TILE(0x00,0x88,0x88,0x88,0x88,0x88,0x50,0x20),
-  /* I */ TXT_TILE(0x00,0xF8,0x20,0x20,0x20,0x20,0x20,0xF8),
-  /* N */ TXT_TILE(0x00,0x88,0xC8,0xA8,0xA8,0x98,0x88,0x88),
-  /* X */ TXT_TILE(0x00,0x88,0x88,0x50,0x20,0x50,0x88,0x88),
-  /* T */ TXT_TILE(0x00,0xF8,0x20,0x20,0x20,0x20,0x20,0x20),
-
-  /* --- Letras INVERTIDAS (oscuro sobre crema) para dentro de
-         las cápsulas del HUD. Tiles 33..43. --- */
-  /* S */ INV_TILE(0x00,0x78,0x80,0x80,0x70,0x08,0x08,0xF0),
-  /* C */ INV_TILE(0x00,0x78,0x80,0x80,0x80,0x80,0x80,0x78),
-  /* O */ INV_TILE(0x00,0x70,0x88,0x88,0x88,0x88,0x88,0x70),
-  /* R */ INV_TILE(0x00,0xF0,0x88,0x88,0xF0,0xA0,0x90,0x88),
-  /* E */ INV_TILE(0x00,0xF8,0x80,0x80,0xF0,0x80,0x80,0xF8),
-  /* L */ INV_TILE(0x00,0x80,0x80,0x80,0x80,0x80,0x80,0xF8),
-  /* V */ INV_TILE(0x00,0x88,0x88,0x88,0x88,0x88,0x50,0x20),
-  /* I */ INV_TILE(0x00,0xF8,0x20,0x20,0x20,0x20,0x20,0xF8),
-  /* N */ INV_TILE(0x00,0x88,0xC8,0xA8,0xA8,0x98,0x88,0x88),
-  /* X */ INV_TILE(0x00,0x88,0x88,0x50,0x20,0x50,0x88,0x88),
-  /* T */ INV_TILE(0x00,0xF8,0x20,0x20,0x20,0x20,0x20,0x20),
-
-  /* --- Tapas redondeadas de las cápsulas.
-         Encoding igual que TXT: bit 1 = cream (color 4), bit 0 = panel
-         (color 3). Cream forma la píldora, panel las esquinas. --- */
-  /* L_cap (tile 44): pill izquierda con rounded top-left y bottom-left */
-  TXT_TILE(0x3F, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x3F),
-  /* R_cap (tile 45): pill derecha con rounded top-right y bottom-right */
-  TXT_TILE(0xFC, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFC),
-
-  /* --- Letras extra light-on-dark: A G M P U (tiles 46..50) --- */
-  /* A */ TXT_TILE(0x00,0x70,0x88,0x88,0xF8,0x88,0x88,0x88),
-  /* G */ TXT_TILE(0x00,0x78,0x80,0x80,0x98,0x88,0x88,0x78),
-  /* M */ TXT_TILE(0x00,0x88,0xD8,0xA8,0xA8,0x88,0x88,0x88),
-  /* P */ TXT_TILE(0x00,0xF0,0x88,0x88,0xF0,0x80,0x80,0x80),
-  /* U */ TXT_TILE(0x00,0x88,0x88,0x88,0x88,0x88,0x88,0x70)
+/* La cápsula mide 9 px: la fila de tiles de la cápsula (8 px, letra en
+   filas 0-6 + margen) y encima un "labio" de 1 px (última fila de los
+   tiles LIP). El redondeo es simétrico arriba y abajo.             */
+static const unsigned char cap_tiles[] = {
+  TXT_TILE(0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x3F),   /* L_cap */
+  TXT_TILE(0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFC),   /* R_cap */
+  TXT_TILE(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3F),   /* L_lip */
+  TXT_TILE(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF),   /* lip   */
+  TXT_TILE(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC)    /* R_lip */
 };
 
 /* ---------------- Tile indices --------------------------------- */
@@ -197,46 +143,21 @@ static const unsigned char font_tiles[] = {
 #define TILE_PANEL     3
 #define TILE_PACCENT   4
 #define TILE_PIECE(t)  (5 + (t))    /* t: 0..6 => I, O, T, S, Z, J, L */
-#define TILE_DIGIT(d)  (12 + (d))   /* d: 0..9 */
-#define TILE_S         22
-#define TILE_C         23
-#define TILE_O         24
-#define TILE_R         25
-#define TILE_E         26
-#define TILE_L         27
-#define TILE_V         28
-#define TILE_I         29
-#define TILE_N         30
-#define TILE_X         31
-#define TILE_T         32
+#define TILE_DIGIT(d)  (12 + (d))            /* 0..9  -> 12..21 */
+#define TILE_LETTER(c) (22 + ((c) - 'A'))    /* A..Z  -> 22..47 */
+#define TILE_DASH      48
+#define TILE_INV(c)    (49 + ((c) - 'A'))    /* A..Z invertidas -> 49..74 */
+#define TILE_INV_BASE  49
 
-/* Letras invertidas (oscuro sobre crema) para dentro de cápsulas */
-#define TILE_INV_S     33
-#define TILE_INV_C     34
-#define TILE_INV_O     35
-#define TILE_INV_R     36
-#define TILE_INV_E     37
-#define TILE_INV_L     38
-#define TILE_INV_V     39
-#define TILE_INV_I     40
-#define TILE_INV_N     41
-#define TILE_INV_X     42
-#define TILE_INV_T     43
-
-#define TILE_LCAP      44
-#define TILE_RCAP      45
-
-/* Letras extra para títulos / game over: A G M P U (light-on-dark) */
-#define TILE_A         46
-#define TILE_G         47
-#define TILE_M         48
-#define TILE_P         49
-#define TILE_U         50
-
-#define TILE_WHITE     51     /* sólido color 13 (blanco) para flash de líneas */
-#define TILE_GHOST     52     /* outline de celda para ghost piece             */
-#define TILE_STAR      53     /* estrellita para splash screen                 */
-#define TILE_MOON      54     /* luna para splash screen                       */
+#define TILE_LCAP      75
+#define TILE_RCAP      76
+#define TILE_WHITE     77     /* sólido color 13 (blanco) para flash de líneas */
+#define TILE_GHOST     78     /* outline de celda para ghost piece             */
+#define TILE_STAR      79     /* estrellita para splash screen                 */
+#define TILE_MOON      80     /* luna para splash screen                       */
+#define TILE_LIP_L     81     /* labio superior de la cápsula (1 px crema)     */
+#define TILE_LIP       82
+#define TILE_LIP_R     83
 
 /* ---------------- Generación en RAM de los 7 tiles de pieza -----
    Patrón uniforme "3D panel" para las 7 piezas: fila superior e
@@ -384,17 +305,9 @@ static void screen_set(unsigned char sx, unsigned char sy, unsigned char tile)
 static unsigned char char_to_tile(char c)
 {
   if (c >= '0' && c <= '9') return (unsigned char)TILE_DIGIT(c - '0');
-  switch (c) {
-    case 'S': return TILE_S;  case 'C': return TILE_C;
-    case 'O': return TILE_O;  case 'R': return TILE_R;
-    case 'E': return TILE_E;  case 'L': return TILE_L;
-    case 'V': return TILE_V;  case 'I': return TILE_I;
-    case 'N': return TILE_N;  case 'X': return TILE_X;
-    case 'T': return TILE_T;  case 'A': return TILE_A;
-    case 'G': return TILE_G;  case 'M': return TILE_M;
-    case 'P': return TILE_P;  case 'U': return TILE_U;
-    default:  return TILE_PANEL;   /* cualquier otro = hueco en panel */
-  }
+  if (c >= 'A' && c <= 'Z') return (unsigned char)TILE_LETTER(c);
+  if (c == '-')             return TILE_DASH;
+  return TILE_PANEL;   /* cualquier otro = hueco en panel */
 }
 
 static void screen_print(unsigned char sx, unsigned char sy, const char *s)
@@ -408,15 +321,8 @@ static void screen_print(unsigned char sx, unsigned char sy, const char *s)
 /* Char -> tile INVERTIDO (oscuro sobre crema, para dentro de cápsulas) */
 static unsigned char char_to_inv_tile(char c)
 {
-  switch (c) {
-    case 'S': return TILE_INV_S;  case 'C': return TILE_INV_C;
-    case 'O': return TILE_INV_O;  case 'R': return TILE_INV_R;
-    case 'E': return TILE_INV_E;  case 'L': return TILE_INV_L;
-    case 'V': return TILE_INV_V;  case 'I': return TILE_INV_I;
-    case 'N': return TILE_INV_N;  case 'X': return TILE_INV_X;
-    case 'T': return TILE_INV_T;
-    default:  return TILE_PACCENT;   /* cream plano para relleno */
-  }
+  if (c >= 'A' && c <= 'Z') return (unsigned char)TILE_INV(c);
+  return TILE_PACCENT;   /* crema plano para relleno */
 }
 
 /* Pinta una cápsula con texto oscuro sobre crema y esquinas redondeadas.
@@ -433,6 +339,11 @@ static void screen_print_capsule(unsigned char sx, unsigned char sy, const char 
       screen_set((unsigned char)(sx + 1 + i), sy, char_to_inv_tile(s[i]));
   }
   screen_set((unsigned char)(sx + 1 + len), sy, TILE_RCAP);
+  /* Labio de 1 px en la fila de encima (siempre libre en el panel) */
+  screen_set(sx, (unsigned char)(sy - 1), TILE_LIP_L);
+  for (p = s; *p; p++)
+    screen_set((unsigned char)(sx + 1 + (p - s)), (unsigned char)(sy - 1), TILE_LIP);
+  screen_set((unsigned char)(sx + 1 + len), (unsigned char)(sy - 1), TILE_LIP_R);
 }
 
 /* ================================================================
@@ -975,7 +886,7 @@ static void score_clear(unsigned char n, unsigned char tspin)
   if (n > 0) back_to_back = difficult;
   if (pts) add_score(pts);
 
-  if (tspin)       { label_text = (tspin == TSPIN_FULL) ? "TSPIN" : "MINI"; label_timer = 90; }
+  if (tspin)       { label_text = (tspin == TSPIN_FULL) ? "T-SPIN" : "MINI"; label_timer = 90; }
   else if (n == 4) { label_text = "TETRIS"; label_timer = 90; }
   if (n) add_lines(n);
 }
@@ -1352,32 +1263,17 @@ static void handle_input(void)
   } else held_drop = 0;
 }
 
-/* Datos PSG incluidos aquí (después del código) para que SDCC los
-   coloque en el segmento CODE de ROM y no en INITIALIZED (RAM). */
-#include "underwater_psg.h"
-
-/* ================================================================
-   Reset / reinicio completo del juego (sin reiniciar VRAM/tiles)
-   ================================================================ */
-/* ---- Música: título (PSGlib, Alex Kidd) / partida (motor propio) ----
-   title_music es de 1 byte: la ISR deja de llamar a PSGFrame en cuanto
-   se pone a 0, así que PSGStop/PSGPlay nunca compiten con ella.      */
-static volatile unsigned char title_music = 0;
-
+/* ---- Música: Kalinka en el título, Korobeiniki en partida, ambas con
+   el motor propio de music.c (sin PSGlib). */
 static void start_title_music(void)
 {
-  music_stop();
-  title_music = 0;
-  PSGPlay(underwater_psg);
-  title_music = 1;
+  music_play_title();
 }
 
 static void start_game_music(void)
 {
-  title_music = 0;
-  PSGStop();
-  music_set_danger(0);
   music_play_game();
+  music_set_danger(0);
 }
 
 static void reset_game(void)
@@ -1412,8 +1308,7 @@ static void reset_game(void)
 
 /* ================================================================
    Handler del VBlank IRQ: corre a 60Hz estable aunque el main loop
-   se atasque. Ejecuta la música (PSGFrame en el título, motor propio
-   en partida) y marca un flag para que el main loop vuelque el tile
+   se atasque. Ejecuta la música (motor propio, music.c) y marca un flag para que el main loop vuelque el tile
    animado. NUNCA escribe al VDP desde aquí: eso causaba race con
    nt_flush.
    ================================================================ */
@@ -1421,7 +1316,6 @@ static void reset_game(void)
 static void vblank_isr(void)
 {
   frame_count++;
-  if (title_music) PSGFrame();
   music_frame();
   if (++anim_counter >= ANIM_SPEED) {
     anim_counter = 0;
@@ -1502,8 +1396,11 @@ void main(void)
   gen_all_piece_tiles();
   SMS_loadTiles(piece_tiles, 5, sizeof(piece_tiles));
 
-  /* Tiles 12..32: fuente (dígitos + 11 letras) */
-  SMS_loadTiles(font_tiles, 12, sizeof(font_tiles));
+  /* Fuente (12..48), letras invertidas (49..74) y tapas de cápsula */
+  SMS_loadTiles(font_normal,   TILE_DIGIT(0),  sizeof(font_normal));
+  SMS_loadTiles(font_inverted, TILE_INV_BASE,  sizeof(font_inverted));
+  SMS_loadTiles(cap_tiles,     TILE_LCAP,      2 * 32);
+  SMS_loadTiles(&cap_tiles[2 * 32], TILE_LIP_L, 3 * 32);
 
   GG_loadBGPalette(bg_palette);
 
@@ -1516,9 +1413,8 @@ void main(void)
 
   game_state = STATE_TITLE;
 
-  /* Música del título: Alex Kidd in Miracle World - Underwater (PSGlib).
-     En partida suena Korobeiniki con el motor propio (music.c). Ambos
-     corren en la ISR de VBlank a 60Hz estables. */
+  /* Música del título: Kalinka. En partida suena Korobeiniki. Ambas
+     corren en la ISR de VBlank a 60Hz estables (music.c). */
   start_title_music();
   SMS_setFrameInterruptHandler(vblank_isr);   /* música + anim fondo a 60Hz */
 
@@ -1529,7 +1425,7 @@ void main(void)
     unsigned char i;
 
     SMS_waitForVBlank();
-    /* PSGFrame corre en el ISR. La anim de fondo marca flag desde el
+    /* La música corre en el ISR. La anim de fondo marca flag desde el
        ISR y volcamos el tile aquí, en el main loop, para evitar el
        race con nt_flush sobre el VDP. */
     if (anim_pending) {

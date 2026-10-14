@@ -158,8 +158,8 @@ static const unsigned char cap_tiles[] = {
 #define TILE_LIP_L     81     /* labio superior de la cápsula (1 px crema)     */
 #define TILE_LIP       82
 #define TILE_LIP_R     83
-#define TILE_PUNCT     84     /* '!' '.' ',' (font_punct) -> 84..86 */
-#define TILE_DARK      87     /* font_dark: misma tabla que normal+punct, fondo oscuro -> 87..126 */
+#define TILE_PUNCT     84     /* ! . , : < > (font_punct) -> 84..89 */
+#define TILE_DARK      90     /* font_dark: misma tabla que normal+punct, fondo oscuro -> 90..132 */
 
 /* ---------------- Generación en RAM de los 7 tiles de pieza -----
    Patrón uniforme "3D panel" para las 7 piezas: fila superior e
@@ -326,6 +326,9 @@ static unsigned char char_to_tile_panel(char c)
   if (c == '!')             return TILE_PUNCT;
   if (c == '.')             return TILE_PUNCT + 1;
   if (c == ',')             return TILE_PUNCT + 2;
+  if (c == ':')             return TILE_PUNCT + 3;
+  if (c == '<')             return TILE_PUNCT + 4;
+  if (c == '>')             return TILE_PUNCT + 5;
   return TILE_PANEL;   /* cualquier otro = hueco en panel */
 }
 
@@ -596,12 +599,69 @@ static unsigned long score = 0;
 static unsigned char level = 0;
 static unsigned int  lines = 0;
 
+/* ---- Modos de juego ---- */
+#define MODE_MARATHON 0      /* sin fin, el nivel sube cada 10 líneas   */
+#define MODE_40LINES  1      /* 40 líneas contrarreloj                  */
+#define MODE_ULTRA    2      /* máxima puntuación en 3 minutos          */
+#define LINES_GOAL    40
+#define ULTRA_FRAMES  (3u * 60u * 60u)
+static unsigned char game_mode   = MODE_MARATHON;
+static unsigned char start_level = 0;
+static unsigned int  play_frames = 0;   /* cronómetro de la partida (frames) */
+
+/* Récords: [MARATHON] puntos, [40LINES] mejor tiempo en frames (0 =
+   ninguno), [ULTRA] puntos. Se guardan en la SRAM del cartucho.     */
+static unsigned long records[3];
+
+/* "M:SS.d" (7 bytes con el terminador). Tope 9:59.9 */
+static void format_time(char *buf, unsigned int frames)
+{
+  unsigned int  secs = frames / 60;
+  unsigned char m = (unsigned char)(secs / 60);
+  unsigned char s = (unsigned char)(secs % 60);
+  unsigned char d = (unsigned char)((frames % 60) / 6);
+  if (m > 9) { m = 9; s = 59; d = 9; }
+  buf[0] = (char)('0' + m);  buf[1] = ':';
+  buf[2] = (char)('0' + s / 10); buf[3] = (char)('0' + s % 10);
+  buf[4] = '.'; buf[5] = (char)('0' + d); buf[6] = 0;
+}
+
+/* ---- SRAM: firma "CPL1", 12 bytes de récords y checksum ---- */
+#define SAVE_SIZE 12
+static const char save_magic[4] = { 'C', 'P', 'L', '1' };
+
+static void load_records(void)
+{
+  unsigned char i, sum = 0, ok = 1;
+  unsigned char *dst = (unsigned char *)records;
+  SMS_enableSRAM();
+  for (i = 0; i < 4; i++)
+    if (SMS_SRAM[i] != (unsigned char)save_magic[i]) ok = 0;
+  for (i = 0; i < SAVE_SIZE; i++) sum += SMS_SRAM[4 + i];
+  if (ok && sum == SMS_SRAM[4 + SAVE_SIZE])
+    for (i = 0; i < SAVE_SIZE; i++) dst[i] = SMS_SRAM[4 + i];
+  else
+    for (i = 0; i < SAVE_SIZE; i++) dst[i] = 0;   /* SRAM vacía o corrupta */
+  SMS_disableSRAM();
+}
+
+static void save_records(void)
+{
+  unsigned char i, sum = 0;
+  const unsigned char *src = (const unsigned char *)records;
+  SMS_enableSRAM();
+  for (i = 0; i < 4; i++) SMS_SRAM[i] = (unsigned char)save_magic[i];
+  for (i = 0; i < SAVE_SIZE; i++) { SMS_SRAM[4 + i] = src[i]; sum += src[i]; }
+  SMS_SRAM[4 + SAVE_SIZE] = sum;
+  SMS_disableSRAM();
+}
+
 static void paint_hud_labels(void)
 {
   /* Cápsulas: L_cap + 5 letras + R_cap = 7 tiles. Panel tiene 8 cols
      (12..19). Ponemos la cápsula en cols 13..19 (col 12 queda dark). */
-  screen_print_capsule(13, 1,  "SCORE");
-  screen_print_capsule(13, 4,  "LEVEL");
+  screen_print_capsule(13, 1,  game_mode == MODE_40LINES ? "TIME" : "SCORE");
+  screen_print_capsule(13, 4,  game_mode == MODE_ULTRA   ? "TIME" : "LEVEL");
   screen_print_capsule(13, 7,  "LINES");
   /* NEXT = 4 letras -> cápsula 6 tiles. Cols 13..18 (col 12 y 19 dark). */
   screen_print_capsule(13, 10, "NEXT");
@@ -637,11 +697,29 @@ static void paint_number(unsigned char sx, unsigned char sy,
   }
 }
 
+/* Cronómetro del HUD: 40 LINES cuenta hacia arriba (en vez de SCORE),
+   ULTRA cuenta hacia atrás desde 3:00.0 (en vez de LEVEL). */
+static void paint_hud_time(void)
+{
+  char buf[7];
+  if (game_mode == MODE_40LINES) {
+    format_time(buf, play_frames);
+    screen_print(13, 2, buf);
+  } else if (game_mode == MODE_ULTRA) {
+    format_time(buf, play_frames >= ULTRA_FRAMES ? 0 : ULTRA_FRAMES - play_frames);
+    screen_print(13, 5, buf);
+  }
+}
+
 static void paint_hud_numbers(void)
 {
-  paint_number(13, 2, score, 6);     /* SCORE 6 dígitos */
-  paint_number(15, 5, level, 2);     /* LEVEL 2 dígitos, centrado */
-  paint_number(14, 8, lines, 4);     /* LINES 4 dígitos */
+  if (game_mode != MODE_40LINES) paint_number(13, 2, score, 6);   /* SCORE 6 dígitos */
+  if (game_mode != MODE_ULTRA)   paint_number(15, 5, level, 2);   /* LEVEL 2 dígitos */
+  if (game_mode == MODE_40LINES)                                  /* líneas que faltan */
+    paint_number(14, 8, lines >= LINES_GOAL ? 0 : LINES_GOAL - lines, 4);
+  else
+    paint_number(14, 8, lines, 4);
+  paint_hud_time();
 }
 
 /* Preview de la siguiente pieza en cuadro 4x4. Se sitúa en
@@ -761,7 +839,11 @@ static unsigned char flash_rows[4];     /* índices (en board) de las filas llen
 static unsigned char n_flash_rows = 0;
 static unsigned char flash_timer = 0;
 static unsigned char gameover_timer = 0; /* frames desde que empezó el game over */
-static unsigned long hiscore = 0;
+#define END_TOPOUT 0
+#define END_CLEAR  1     /* 40 LINES completado */
+#define END_TIMEUP 2     /* ULTRA: se acabó el tiempo */
+static unsigned char end_result = END_TOPOUT;
+static unsigned char end_record = 0;   /* 1 = récord nuevo */
 
 #define FLASH_DURATION 24    /* frames totales de animación (~400ms)     */
 #define FLASH_PHASE    6     /* alterna blanco/normal cada N frames      */
@@ -800,9 +882,11 @@ static void add_lines(unsigned char n)
   if (n == 0) return;
   if (n > 4) n = 4;
   lines += n;
-  /* Nivel sube cada 10 líneas */
-  {
+  /* Maratón: el nivel sube cada 10 líneas, nunca por debajo del
+     elegido. En 40 LINES y ULTRA el nivel es fijo. */
+  if (game_mode == MODE_MARATHON) {
     unsigned char new_level = (unsigned char)(lines / 10);
+    if (new_level < start_level) new_level = start_level;
     if (new_level > MAX_LEVEL) new_level = MAX_LEVEL;
     if (new_level != level) {
       level = new_level;
@@ -825,13 +909,25 @@ static void update_danger(void)
 
 /* Única entrada al estado de game over (antes había 2 caminos y uno
    se perdía: ver finalize_line_clear). */
-static void enter_game_over(void)
+static void enter_game_over(unsigned char result)
 {
   game_state = STATE_GAMEOVER;
   gameover_timer = 0;
-  if (score > hiscore) hiscore = score;
+  end_result = result;
+  end_record = 0;
+  if (game_mode == MODE_40LINES) {
+    if (result == END_CLEAR &&
+        (records[MODE_40LINES] == 0 || play_frames < records[MODE_40LINES])) {
+      records[MODE_40LINES] = play_frames;
+      end_record = 1;
+    }
+  } else if (score > records[game_mode]) {
+    records[game_mode] = score;
+    end_record = 1;
+  }
+  if (end_record) save_records();
   music_stop();
-  sfx_play(SFX_GAMEOVER);
+  sfx_play(result == END_TOPOUT ? SFX_GAMEOVER : SFX_LEVELUP);
 }
 
 static unsigned char soft_dropping = 0;  /* 1 si el descenso actual es por soft drop */
@@ -935,7 +1031,7 @@ static void lock_current_piece(void)
     sfx_play(SFX_TSPIN);
   }
   update_danger();
-  if (!spawn_piece()) enter_game_over();
+  if (!spawn_piece()) enter_game_over(END_TOPOUT);
   need_hud_refresh = 1;
 }
 
@@ -967,6 +1063,14 @@ static void finalize_line_clear(void)
 {
   clear_lines();    /* removerá exactamente n_flash_rows */
   score_clear(n_flash_rows, pending_tspin);
+  if (game_mode == MODE_40LINES && lines >= LINES_GOAL) {
+    n_flash_rows = 0;
+    need_full_board_repaint = 1;
+    have_prev = 0;
+    need_hud_refresh = 1;
+    enter_game_over(END_CLEAR);
+    return;
+  }
   n_flash_rows = 0;
   need_full_board_repaint = 1;
   have_prev = 0;
@@ -974,7 +1078,7 @@ static void finalize_line_clear(void)
   /* BUG corregido: antes se ponía STATE_GAMEOVER y a continuación se
      pisaba con STATE_PLAY, dejando el juego congelado con game_over=1. */
   game_state = STATE_PLAY;
-  if (!spawn_piece()) enter_game_over();
+  if (!spawn_piece()) enter_game_over(END_TOPOUT);
   need_hud_refresh = 1;
 }
 
@@ -1045,28 +1149,81 @@ static void paint_disclaimer_screen(void)
 }
 
 /* "PRESS START" del título (parpadea: on=0 lo borra) */
+#define PRESS_START_ROW 17
 static void paint_press_start(unsigned char on)
 {
   static const char txt[] = "PRESS START";
   unsigned char i;
   for (i = 0; txt[i]; i++)
-    screen_set((unsigned char)(4 + i), 14,
+    screen_set((unsigned char)(4 + i), PRESS_START_ROW,
                (on && txt[i] != ' ') ? char_to_tile(txt[i]) : TILE_BG);
-}
-
-/* 6 dígitos con ceros a la izquierda (para fondos que no son el panel) */
-static void paint_digits6(unsigned char sx, unsigned char sy, unsigned long v)
-{
-  unsigned char i;
-  for (i = 6; i > 0; i--) {
-    screen_set((unsigned char)(sx + i - 1), sy, char_to_tile((char)('0' + (unsigned char)(v % 10))));
-    v /= 10;
-  }
 }
 
 /* Splash screen estilo GB Tetris adaptada a GG (sin Nintendo, obviamente).
    Cielo nocturno con estrellas + luna + título + silueta del Kremlin
    hecha con piezas de Tetris (meta-homenaje) + muralla de ladrillos. */
+/* ---- Menú del título: modo y nivel inicial, y récord del modo ---- */
+#define MENU_ROW_MODE   13
+#define MENU_ROW_LEVEL  14
+#define MENU_ROW_TOP    16
+static const char * const mode_names[3] = { "MARATHON", "40 LINES", "ULTRA" };
+static unsigned char menu_row = 0;     /* 0 = modo, 1 = nivel */
+
+static void clear_row(unsigned char sy)
+{
+  unsigned char x;
+  for (x = 0; x < 20; x++) screen_set(x, sy, TILE_BG);
+}
+
+/* Fila del menú centrada; la seleccionada va entre < > */
+static void paint_menu_row(unsigned char sy, const char *txt, unsigned char selected)
+{
+  unsigned char len = 0, x;
+  while (txt[len]) len++;
+  x = (unsigned char)((20 - len) / 2);
+  clear_row(sy);
+  screen_print(x, sy, txt);
+  if (selected) {
+    screen_set((unsigned char)(x - 2), sy, char_to_tile('<'));
+    screen_set((unsigned char)(x + len + 1), sy, char_to_tile('>'));
+  }
+}
+
+static void paint_menu(void)
+{
+  static char lvl[] = "LEVEL 0";
+  char top[11] = "TOP ";
+  text_dark = 1;
+  paint_menu_row(MENU_ROW_MODE, mode_names[game_mode], menu_row == 0);
+  lvl[6] = (char)('0' + start_level);
+  paint_menu_row(MENU_ROW_LEVEL, lvl, menu_row == 1);
+  if (game_mode == MODE_40LINES) {
+    if (records[MODE_40LINES]) format_time(&top[4], (unsigned int)records[MODE_40LINES]);
+    else { top[4] = '-'; top[5] = ':'; top[6] = '-'; top[7] = '-'; top[8] = '.'; top[9] = '-'; top[10] = 0; }
+  } else {
+    unsigned long v = records[game_mode];
+    unsigned char i;
+    for (i = 9; i >= 4; i--) { top[i] = (char)('0' + (unsigned char)(v % 10)); v /= 10; }
+    top[10] = 0;
+  }
+  paint_menu_row(MENU_ROW_TOP, top, 0);
+}
+
+static void menu_input(unsigned int k)
+{
+  if (k & (PORT_A_KEY_UP | PORT_A_KEY_DOWN)) {
+    menu_row ^= 1;
+  } else if (k & (PORT_A_KEY_LEFT | PORT_A_KEY_RIGHT)) {
+    unsigned char right = (k & PORT_A_KEY_RIGHT) ? 1 : 0;
+    if (menu_row == 0) game_mode   = (unsigned char)((game_mode + (right ? 1 : 2)) % 3);
+    else               start_level = (unsigned char)((start_level + (right ? 1 : 9)) % 10);
+  } else {
+    return;
+  }
+  sfx_play(SFX_ROTATE);
+  paint_menu();
+}
+
 static void paint_title_screen(void)
 {
   text_dark = 1;
@@ -1124,14 +1281,8 @@ static void paint_title_screen(void)
     screen_set(x, 12, TILE_BRICK);
   }
 
+  paint_menu();
   paint_press_start(1);
-
-  /* --- Récord de la sesión --- */
-  screen_print(5, 16, "TOP");
-  paint_digits6(9, 16, hiscore);
-
-  /* --- Año --- */
-  screen_print(8, 17, "2026");
 }
 
 /* Rellena una fila visible del tablero (coords de pantalla) con un tile */
@@ -1159,13 +1310,32 @@ static void paint_pause_overlay(void)
   screen_print(4, 8, "PAUSE");
 }
 
+/* Texto centrado en el tablero (10 columnas, x de pantalla 1..10) */
+static void board_print(unsigned char sy, const char *s)
+{
+  unsigned char len = 0;
+  while (s[len]) len++;
+  screen_print((unsigned char)(BOARD_X0 + (BOARD_W - len) / 2), sy, s);
+}
+
 static void paint_gameover_overlay(void)
 {
   unsigned char y;
-  for (y = 6; y <= 10; y++)
+  char buf[7];
+  for (y = 6; y <= (end_record ? 12 : 10); y++)
     fill_board_row(y, TILE_PANEL);
-  screen_print(4, 7, "GAME");
-  screen_print(4, 9, "OVER");
+  if (end_result == END_CLEAR) {
+    board_print(7, "CLEAR");
+    format_time(buf, play_frames);
+    board_print(9, buf);
+  } else if (end_result == END_TIMEUP) {
+    board_print(7, "TIME");
+    board_print(9, "UP");
+  } else {
+    board_print(7, "GAME");
+    board_print(9, "OVER");
+  }
+  if (end_record) board_print(11, "RECORD!");
 }
 
 static void reset_game(void);  /* forward decl */
@@ -1444,7 +1614,8 @@ static void reset_game(void)
   for (y = 0; y < BOARD_H; y++)
     for (x = 0; x < BOARD_W; x++)
       board[y][x] = 0;
-  score = 0; level = 0; lines = 0;
+  score = 0; level = start_level; lines = 0;
+  play_frames = 0;
   game_state = STATE_PLAY;
   n_flash_rows = 0;
   have_prev = 0;
@@ -1484,6 +1655,15 @@ static void vblank_isr(void)
     anim_frame_idx = (unsigned char)((anim_frame_idx + 1) & 7);
     anim_pending = 1;
   }
+}
+
+/* Cronómetro de 40 LINES / ULTRA: avanza 1 por frame de juego y el HUD
+   se repinta cada décima (6 frames). */
+static void tick_timer(void)
+{
+  if (game_mode == MODE_MARATHON) return;
+  if (play_frames < 0xFFFF) play_frames++;
+  if ((unsigned char)(play_frames % 6) == 0) paint_hud_time();
 }
 
 #define GAMEOVER_CURTAIN (2 * VISIBLE_H)     /* una fila cada 2 frames */
@@ -1571,6 +1751,7 @@ void main(void)
   SMS_initSprites();
   SMS_copySpritestoSAT();
 
+  load_records();
   nt_init();
   paint_logo_screen();
   nt_flush_all();
@@ -1609,6 +1790,8 @@ void main(void)
         start_was_pressed = start_now;
         if ((k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || start_edge) {
           reset_game();
+        } else {
+          menu_input(k);
         }
       }
     } else if (game_state == STATE_PAUSE) {
@@ -1632,6 +1815,11 @@ void main(void)
       if (game_state == STATE_PAUSE) continue;
 
       handle_input();
+      tick_timer();
+      if (game_mode == MODE_ULTRA && play_frames >= ULTRA_FRAMES) {
+        enter_game_over(END_TIMEUP);
+        continue;
+      }
       if (lock_now) {
         lock_now = 0;
         lock_current_piece();
@@ -1736,6 +1924,7 @@ void main(void)
         need_full_board_repaint = 0;
       }
       paint_flash_rows();
+      tick_timer();
       if (--flash_timer == 0) {
         finalize_line_clear();
       }

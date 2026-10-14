@@ -9,7 +9,7 @@ Salida (tiles 4bpp planares del VDP, 32 bytes por tile):
   font_inverted[] : 'A'..'Z'                  texto dentro de las cápsulas,
                     subido 1 px (filas 0-6; la 7 es margen inferior),
                     sobre crema (4), azul (10) filas 0-2 -> marino (0) 3-6
-  font_punct[]     : '!', '.', ','            como font_normal
+  font_punct[]     : '!' '.' ',' ':' '<' '>'  como font_normal
   font_dark[]      : normal + puntuación sobre el fondo oscuro (color 0),
                      para el título y la intro
 """
@@ -23,7 +23,7 @@ OUT = ROOT / "tetrisgg" / "font_tiles.h"
 
 NORMAL_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-"
 INVERTED_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-PUNCT_CHARS = "!.,"       # aparte, al final del VRAM (no mueve índices)
+PUNCT_CHARS = "!.,:<>"    # aparte, al final del VRAM (no mueve índices)
 SPLIT_ROW = 4            # filas < SPLIT_ROW usan el color de arriba
 
 img = Image.open(SRC).convert("RGB")

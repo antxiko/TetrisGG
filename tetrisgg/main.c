@@ -743,9 +743,7 @@ static void paint_next_preview(void)
 }
 
 /* ---- pieza activa sobre el tablero ---- */
-static signed char prev_blocks[4][2];
 static signed char prev_ghost[4][2];
-static unsigned char have_prev = 0;
 
 /* Cache de ghost: solo recalculamos landing_y cuando la pieza cambia */
 static unsigned char ghost_last_type = 0xFF;
@@ -769,30 +767,6 @@ static void current_blocks(signed char out[4][2])
         i++;
       }
     }
-  }
-}
-
-static void paint_piece_blocks(signed char bl[4][2])
-{
-  unsigned char i, tile = TILE_PIECE(cur_type);
-  signed char sy;
-  for (i = 0; i < 4; i++) {
-    if (bl[i][0] < 0 || bl[i][0] >= BOARD_W) continue;
-    sy = bl[i][1] - (signed char)HIDDEN_H;
-    if (sy < 0 || sy >= (signed char)VISIBLE_H) continue;
-    screen_set(BOARD_X0 + (unsigned char)bl[i][0],
-               BOARD_Y0 + (unsigned char)sy, tile);
-  }
-}
-
-static void restore_prev_blocks(void)
-{
-  unsigned char i;
-  for (i = 0; i < 4; i++) {
-    if (prev_blocks[i][0] < 0 || prev_blocks[i][0] >= BOARD_W) continue;
-    if (prev_blocks[i][1] < 0 || prev_blocks[i][1] >= BOARD_H) continue;
-    paint_board_cell((unsigned char)prev_blocks[i][0],
-                     (unsigned char)prev_blocks[i][1]);
   }
 }
 
@@ -1012,7 +986,6 @@ static void lock_current_piece(void)
   pending_tspin = tspin_check();
   lock_piece();
   need_full_board_repaint = 1;  /* mostrar pieza recién bloqueada  */
-  have_prev = 0;
   sfx_play(SFX_LOCK);
 
   /* ¿hay líneas completas? -> entrar en STATE_FLASH y esperar a que
@@ -1066,14 +1039,12 @@ static void finalize_line_clear(void)
   if (game_mode == MODE_40LINES && lines >= LINES_GOAL) {
     n_flash_rows = 0;
     need_full_board_repaint = 1;
-    have_prev = 0;
     need_hud_refresh = 1;
     enter_game_over(END_CLEAR);
     return;
   }
   n_flash_rows = 0;
   need_full_board_repaint = 1;
-  have_prev = 0;
   update_danger();
   /* BUG corregido: antes se ponía STATE_GAMEOVER y a continuación se
      pisaba con STATE_PLAY, dejando el juego congelado con game_over=1. */
@@ -1618,7 +1589,6 @@ static void reset_game(void)
   play_frames = 0;
   game_state = STATE_PLAY;
   n_flash_rows = 0;
-  have_prev = 0;
   invalidate_ghost_cache();
   soft_dropping = 0;
   das_counter_l = 0; das_counter_r = 0;
@@ -1664,6 +1634,39 @@ static void tick_timer(void)
   if (game_mode == MODE_MARATHON) return;
   if (play_frames < 0xFFFF) play_frames++;
   if ((unsigned char)(play_frames % 6) == 0) paint_hud_time();
+}
+
+/* ---- Pieza activa como 4 sprites con caída suave al píxel ----
+   La lógica sigue por casillas; solo el dibujo baja suave: entre dos
+   pasos de gravedad la pieza se desplaza 0..7 px según lo que lleve
+   consumido el temporizador. Apoyada no se desplaza. Los sprites usan
+   los tiles 256+ (la mitad alta del VRAM) con la misma paleta.      */
+#define SPRITE_TILE_BASE 256
+static unsigned char piece_subpixel(void)
+{
+  unsigned char period, elapsed;
+  if (!fits(cur_type, cur_rot, cur_x, (signed char)(cur_y + 1))) return 0;
+  period = soft_dropping ? SOFT_DROP_FRAMES : fall_frames();
+  if (fall_timer > period) return 0;
+  elapsed = (unsigned char)(period - fall_timer);
+  return (unsigned char)(((unsigned int)elapsed * 8) / period);
+}
+
+static void update_piece_sprites(void)
+{
+  SMS_initSprites();
+  if (game_state == STATE_PLAY) {
+    signed char bl[4][2];
+    unsigned char i, sub = piece_subpixel();
+    current_blocks(bl);
+    for (i = 0; i < 4; i++) {
+      /* Filas ocultas: quedan por encima de la ventana de la GG (y < 24)
+         y el LCD las recorta solo. */
+      unsigned char px = (unsigned char)((VIEW_X0 + BOARD_X0 + bl[i][0]) * 8);
+      unsigned char py = (unsigned char)((VIEW_Y0 + BOARD_Y0 + bl[i][1] - HIDDEN_H) * 8 + sub);
+      SMS_addSprite(px, py, TILE_PIECE(cur_type));
+    }
+  }
 }
 
 #define GAMEOVER_CURTAIN (2 * VISIBLE_H)     /* una fila cada 2 frames */
@@ -1737,6 +1740,9 @@ void main(void)
   /* Tiles 5..11: piezas 3D generadas en RAM */
   gen_all_piece_tiles();
   SMS_loadTiles(piece_tiles, 5, sizeof(piece_tiles));
+  /* Copia para los sprites de la pieza activa (tiles 256+) */
+  SMS_useFirstHalfTilesforSprites(0);
+  SMS_loadTiles(piece_tiles, SPRITE_TILE_BASE + 5, sizeof(piece_tiles));
 
   /* Fuente (12..48), letras invertidas (49..74) y tapas de cápsula */
   SMS_loadTiles(font_normal,   TILE_DIGIT(0),  sizeof(font_normal));
@@ -1748,6 +1754,7 @@ void main(void)
 
   fade_level(0);    /* arranca en negro: la intro hace el fundido */
 
+  GG_loadSpritePalette(bg_palette);   /* el color 0 es transparente */
   SMS_initSprites();
   SMS_copySpritestoSAT();
 
@@ -1765,10 +1772,9 @@ void main(void)
   SMS_displayOn();
 
   for (;;) {
-    signed char new_blocks[4][2];
-    unsigned char i;
-
     SMS_waitForVBlank();
+    /* Sprites de la pieza activa (calculados el frame anterior) */
+    SMS_copySpritestoSAT();
     /* La música corre en el ISR. La anim de fondo marca flag desde el
        ISR y volcamos el tile aquí, en el main loop, para evitar el
        race con nt_flush sobre el VDP. */
@@ -1832,33 +1838,10 @@ void main(void)
         piece_step_down();
       }
 
-      /* Cache de pieza: solo re-renderizar si realmente cambió */
-      {
-        static unsigned char piece_last_type = 0xFF;
-        static unsigned char piece_last_rot  = 0xFF;
-        static signed char   piece_last_x    = -100;
-        static signed char   piece_last_y    = -100;
-        unsigned char piece_moved = (cur_type != piece_last_type ||
-                                     cur_rot  != piece_last_rot  ||
-                                     cur_x    != piece_last_x    ||
-                                     cur_y    != piece_last_y);
-
-        if (need_full_board_repaint) {
-          paint_full_board();
-          need_full_board_repaint = 0;
-          invalidate_ghost_cache();
-          piece_last_type = 0xFF;
-          piece_moved = 1;
-        } else if (piece_moved && have_prev) {
-          restore_prev_blocks();
-        }
-
-        piece_last_type = cur_type;
-        piece_last_rot  = cur_rot;
-        piece_last_x    = cur_x;
-        piece_last_y    = cur_y;
-
-        if (!piece_moved) goto skip_piece_render;
+      if (need_full_board_repaint) {
+        paint_full_board();
+        need_full_board_repaint = 0;
+        invalidate_ghost_cache();
       }
 
       /* Ghost piece: solo depende de tipo/rotación/columna (NO de cur_y).
@@ -1910,14 +1893,6 @@ void main(void)
           ghost_last_x    = cur_x;
         }
       }
-      current_blocks(new_blocks);
-      paint_piece_blocks(new_blocks);
-      for (i = 0; i < 4; i++) {
-        prev_blocks[i][0] = new_blocks[i][0];
-        prev_blocks[i][1] = new_blocks[i][1];
-      }
-      have_prev = 1;
-    skip_piece_render: ;
     } else if (game_state == STATE_FLASH) {
       if (need_full_board_repaint) {
         paint_full_board();
@@ -1960,6 +1935,8 @@ void main(void)
     }
 
     /* HUD solo en estados de juego (no en TITLE) */
+    update_piece_sprites();
+
     if (label_timer && game_state != STATE_TITLE && game_state != STATE_INTRO) {
       if (label_timer == 90) {
         fill_panel_row(17);

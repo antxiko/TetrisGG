@@ -158,6 +158,8 @@ static const unsigned char cap_tiles[] = {
 #define TILE_LIP_L     81     /* labio superior de la cápsula (1 px crema)     */
 #define TILE_LIP       82
 #define TILE_LIP_R     83
+#define TILE_PUNCT     84     /* '!' '.' ',' (font_punct) -> 84..86 */
+#define TILE_DARK      87     /* font_dark: misma tabla que normal+punct, fondo oscuro -> 87..126 */
 
 /* ---------------- Generación en RAM de los 7 tiles de pieza -----
    Patrón uniforme "3D panel" para las 7 piezas: fila superior e
@@ -302,11 +304,28 @@ static void screen_set(unsigned char sx, unsigned char sy, unsigned char tile)
 }
 
 /* ---- Escritura de texto (solo ASCII básico que definimos arriba) ---- */
+/* 1 = texto sobre el fondo oscuro (título, intro); 0 = sobre el panel */
+static unsigned char text_dark = 0;
+
+static unsigned char char_to_tile_panel(char c);
 static unsigned char char_to_tile(char c)
+{
+  unsigned char t = char_to_tile_panel(c);
+  if (!text_dark) return t;
+  if (t == TILE_PANEL) return TILE_BG;
+  /* font_dark sigue el orden de font_normal (12..48) y luego font_punct */
+  if (t >= TILE_PUNCT) return (unsigned char)(TILE_DARK + FONT_NORMAL_COUNT + (t - TILE_PUNCT));
+  return (unsigned char)(TILE_DARK + (t - TILE_DIGIT(0)));
+}
+
+static unsigned char char_to_tile_panel(char c)
 {
   if (c >= '0' && c <= '9') return (unsigned char)TILE_DIGIT(c - '0');
   if (c >= 'A' && c <= 'Z') return (unsigned char)TILE_LETTER(c);
   if (c == '-')             return TILE_DASH;
+  if (c == '!')             return TILE_PUNCT;
+  if (c == '.')             return TILE_PUNCT + 1;
+  if (c == ',')             return TILE_PUNCT + 2;
   return TILE_PANEL;   /* cualquier otro = hueco en panel */
 }
 
@@ -734,6 +753,7 @@ static unsigned char need_hud_refresh = 1;
 #define STATE_FLASH    2
 #define STATE_GAMEOVER 3
 #define STATE_PAUSE    4
+#define STATE_INTRO    5
 
 static unsigned char game_state = STATE_TITLE;
 static unsigned char start_was_pressed = 0;  /* para edge-detect del Start de GG */
@@ -961,6 +981,69 @@ static void finalize_line_clear(void)
 /* ================================================================
    Game Over overlay + reinicio
    ================================================================ */
+/* ================================================================
+   Pantallas de entrada: logo de Compila! y disclaimer. Cada una
+   entra y sale con fundido de paleta; se saltan con cualquier botón.
+   ================================================================ */
+static void clear_screen(void)
+{
+  unsigned char x, y;
+  for (y = 0; y < 18; y++)
+    for (x = 0; x < 20; x++)
+      screen_set(x, y, TILE_BG);
+}
+
+/* Texto centrado en la ventana de 20 columnas */
+static void print_centered(unsigned char sy, const char *s)
+{
+  unsigned char len = 0;
+  while (s[len]) len++;
+  screen_print((unsigned char)((20 - len) / 2), sy, s);
+}
+
+/* Logo del grupo: pantalla vacía con COMPILA! en el centro. La "!"
+   no se pinta aquí: cae desde arriba (animate_logo_bang). */
+#define LOGO_X      6       /* "COMPILA!" centrado: (20 - 8) / 2 */
+#define LOGO_ROW    8
+#define LOGO_DELAY  10      /* frames de pausa antes de que caiga la ! */
+static void paint_logo_screen(void)
+{
+  text_dark = 1;
+  clear_screen();
+  screen_print(LOGO_X, LOGO_ROW, "COMPILA");
+}
+
+/* La ! cae a 1 fila por frame hasta su sitio y suena el "tiruriruriiin".
+   t = frames desde que terminó el fundido de entrada. */
+static void animate_logo_bang(unsigned int t)
+{
+  unsigned char x = LOGO_X + 7, y;
+  if (t < LOGO_DELAY || t - LOGO_DELAY > LOGO_ROW) return;
+  y = (unsigned char)(t - LOGO_DELAY);
+  if (y > 0) screen_set(x, (unsigned char)(y - 1), TILE_BG);
+  screen_set(x, y, char_to_tile('!'));
+  if (y == LOGO_ROW) sfx_play(SFX_LOGO);
+}
+
+static void paint_disclaimer_screen(void)
+{
+  text_dark = 1;
+  clear_screen();
+  print_centered(1,  "A FREE, NON-PROFIT");
+  print_centered(2,  "TRIBUTE TO A GAME");
+  print_centered(3,  "OF MY CHILDHOOD,");
+  print_centered(4,  "ON THE CONSOLE OF");
+  print_centered(5,  "MY CHILDHOOD.");
+  print_centered(8,  "UNOFFICIAL.");
+  print_centered(9,  "NOT FOR SALE.");
+  print_centered(11, "NOT AFFILIATED WITH");
+  print_centered(12, "OR ENDORSED BY");
+  print_centered(13, "THE TETRIS COMPANY.");
+  print_centered(15, "TETRIS IS A");
+  print_centered(16, "TRADEMARK OF");
+  print_centered(17, "TETRIS HOLDING.");
+}
+
 /* "PRESS START" del título (parpadea: on=0 lo borra) */
 static void paint_press_start(unsigned char on)
 {
@@ -976,7 +1059,7 @@ static void paint_digits6(unsigned char sx, unsigned char sy, unsigned long v)
 {
   unsigned char i;
   for (i = 6; i > 0; i--) {
-    screen_set((unsigned char)(sx + i - 1), sy, TILE_DIGIT((unsigned char)(v % 10)));
+    screen_set((unsigned char)(sx + i - 1), sy, char_to_tile((char)('0' + (unsigned char)(v % 10))));
     v /= 10;
   }
 }
@@ -986,6 +1069,7 @@ static void paint_digits6(unsigned char sx, unsigned char sy, unsigned long v)
    hecha con piezas de Tetris (meta-homenaje) + muralla de ladrillos. */
 static void paint_title_screen(void)
 {
+  text_dark = 1;
   unsigned char x, y;
 
   /* Limpiar toda el área visible (20x18) con fondo oscuro */
@@ -1047,10 +1131,7 @@ static void paint_title_screen(void)
   paint_digits6(9, 16, hiscore);
 
   /* --- Año --- */
-  screen_set(8,  17, TILE_DIGIT(2));
-  screen_set(9,  17, TILE_DIGIT(0));
-  screen_set(10, 17, TILE_DIGIT(2));
-  screen_set(11, 17, TILE_DIGIT(6));
+  screen_print(8, 17, "2026");
 }
 
 /* Rellena una fila visible del tablero (coords de pantalla) con un tile */
@@ -1270,6 +1351,86 @@ static void start_title_music(void)
   music_play_title();
 }
 
+/* ---- Intro: logo Compila! -> disclaimer -> título, con fundidos ----
+   Cada pantalla: INTRO_BLACK frames en negro (el shadow buffer se vuelca
+   con presupuesto sin que se vea), fundido de entrada, espera (se salta
+   con cualquier botón) y fundido de salida. */
+#define INTRO_BLACK  8
+#define INTRO_FADE   32                       /* 16 niveles x 2 frames */
+#define INTRO_IN     (INTRO_BLACK + INTRO_FADE)
+#define INTRO_LOGO       0                    /* COMPILA! solo, centrado */
+#define INTRO_DISCLAIMER 1
+#define INTRO_TITLE      2                    /* "pantalla" 2 = título    */
+static unsigned char intro_screen = INTRO_LOGO;
+static unsigned int  intro_timer  = 0;
+static const unsigned int intro_hold[2] = { 180, 480 };   /* 3 s y 8 s */
+
+/* k = 0 negro .. 15 paleta normal: resta (15-k) a cada componente */
+static void fade_level(unsigned char k)
+{
+  static unsigned int pal[16];
+  unsigned char i, s = (unsigned char)(15 - k);
+  for (i = 0; i < 16; i++) {
+    unsigned int col = bg_palette[i];
+    unsigned char r = (unsigned char)(col & 0x0F);
+    unsigned char g = (unsigned char)((col >> 4) & 0x0F);
+    unsigned char b = (unsigned char)((col >> 8) & 0x0F);
+    r = r > s ? (unsigned char)(r - s) : 0;
+    g = g > s ? (unsigned char)(g - s) : 0;
+    b = b > s ? (unsigned char)(b - s) : 0;
+    pal[i] = RGB(r, g, b);
+  }
+  GG_loadBGPalette(pal);
+}
+
+static unsigned char fade_in_level(unsigned int t)
+{
+  if (t <= INTRO_BLACK) return 0;
+  t = (t - INTRO_BLACK) / 2;
+  return (unsigned char)(t > 15 ? 15 : t);
+}
+
+static void update_intro(void)
+{
+  unsigned int k = SMS_getKeysPressed();
+  unsigned char start_now = GG_START_PRESSED();
+  unsigned char skip = (k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || (start_now && !start_was_pressed);
+  start_was_pressed = start_now;
+
+  intro_timer++;
+  if (intro_timer <= INTRO_IN) {
+    fade_level(fade_in_level(intro_timer));
+    if (intro_timer == INTRO_IN && intro_screen == INTRO_TITLE)
+      game_state = STATE_TITLE;
+    return;
+  }
+  {
+    unsigned int hold = intro_hold[intro_screen];
+    unsigned int t;
+    if (intro_timer <= INTRO_IN + hold) {
+      if (intro_screen == INTRO_LOGO)    animate_logo_bang(intro_timer - INTRO_IN);
+      if (skip) intro_timer = INTRO_IN + hold;   /* saltar: directo al fundido */
+      return;
+    }
+    t = intro_timer - INTRO_IN - hold;           /* 1..INTRO_FADE */
+    if (t < INTRO_FADE) {
+      fade_level((unsigned char)(15 - t / 2));
+      return;
+    }
+  }
+  /* Fundido de salida terminado (pantalla en negro): siguiente */
+  fade_level(0);
+  intro_timer = 0;
+  if (intro_screen == INTRO_LOGO) {
+    intro_screen = INTRO_DISCLAIMER;
+    paint_disclaimer_screen();
+  } else {
+    intro_screen = INTRO_TITLE;
+    paint_title_screen();
+    start_title_music();
+  }
+}
+
 static void start_game_music(void)
 {
   music_play_game();
@@ -1278,6 +1439,7 @@ static void start_game_music(void)
 
 static void reset_game(void)
 {
+  text_dark = 0;   /* HUD y overlays van sobre el panel */
   unsigned char x, y;
   for (y = 0; y < BOARD_H; y++)
     for (x = 0; x < BOARD_W; x++)
@@ -1401,21 +1563,22 @@ void main(void)
   SMS_loadTiles(font_inverted, TILE_INV_BASE,  sizeof(font_inverted));
   SMS_loadTiles(cap_tiles,     TILE_LCAP,      2 * 32);
   SMS_loadTiles(&cap_tiles[2 * 32], TILE_LIP_L, 3 * 32);
+  SMS_loadTiles(font_punct,    TILE_PUNCT,     sizeof(font_punct));
+  SMS_loadTiles(font_dark,     TILE_DARK,      sizeof(font_dark));
 
-  GG_loadBGPalette(bg_palette);
+  fade_level(0);    /* arranca en negro: la intro hace el fundido */
 
   SMS_initSprites();
   SMS_copySpritestoSAT();
 
   nt_init();
-  paint_title_screen();
+  paint_logo_screen();
   nt_flush_all();
 
-  game_state = STATE_TITLE;
-
-  /* Música del título: Kalinka. En partida suena Korobeiniki. Ambas
-     corren en la ISR de VBlank a 60Hz estables (music.c). */
-  start_title_music();
+  /* Intro (logo + disclaimer) y luego el título. Música del título:
+     Kalinka; en partida, Korobeiniki. Ambas corren en la ISR de VBlank
+     a 60Hz estables (music.c). */
+  game_state = STATE_INTRO;
   SMS_setFrameInterruptHandler(vblank_isr);   /* música + anim fondo a 60Hz */
 
   SMS_displayOn();
@@ -1434,7 +1597,9 @@ void main(void)
     }
     nt_flush();
 
-    if (game_state == STATE_TITLE) {
+    if (game_state == STATE_INTRO) {
+      update_intro();
+    } else if (game_state == STATE_TITLE) {
       paint_press_start(!((unsigned char)frame_count & 0x20));
       /* Start (o Button 1/2) arranca partida */
       {
@@ -1606,14 +1771,14 @@ void main(void)
     }
 
     /* HUD solo en estados de juego (no en TITLE) */
-    if (label_timer && game_state != STATE_TITLE) {
+    if (label_timer && game_state != STATE_TITLE && game_state != STATE_INTRO) {
       if (label_timer == 90) {
         fill_panel_row(17);
         screen_print(13, 17, label_text);
       }
       if (--label_timer == 0) fill_panel_row(17);
     }
-    if (need_hud_refresh && game_state != STATE_TITLE) {
+    if (need_hud_refresh && game_state != STATE_TITLE && game_state != STATE_INTRO) {
       paint_hud_numbers();
       paint_next_preview();
       need_hud_refresh = 0;

@@ -224,9 +224,15 @@ static const unsigned char sfx_gameover[] = { E5,4,8, D5,4,8, C5,4,8, B4,4,8, A4
 static const unsigned char sfx_tspin[]    = { G5,3,3, B5,3,3, D6,3,3, G6,3,4, D6,3,3, G6,3,8,
                                               G6,8,6, SFX_END };
 
-static const unsigned char * const sfx_table[9] = {
+/* "Tiruriruriiiiin" del logo de Compila!: Sol-Si-Re-Si rápidos y un Sol
+   agudo largo que se apaga poco a poco */
+static const unsigned char sfx_logo[]     = { G5,3,4, B5,3,4, D6,3,4, B5,3,4,
+                                              G6,2,24, G6,4,12, G6,6,12, G6,8,12,
+                                              G6,11,12, SFX_END };
+
+static const unsigned char * const sfx_table[10] = {
   0, sfx_rotate, sfx_lock, sfx_line, sfx_tetris, sfx_levelup, sfx_pause, sfx_gameover,
-  sfx_tspin
+  sfx_tspin, sfx_logo
 };
 
 static volatile unsigned char sfx_req_tone  = 0;   /* petición desde el main loop */

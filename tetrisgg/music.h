@@ -15,6 +15,7 @@
 #define SFX_PAUSE     6
 #define SFX_GAMEOVER  7
 #define SFX_TSPIN     8
+#define SFX_LOGO      9
 
 void music_play_game(void);
 void music_play_title(void);

@@ -1,146 +1,10 @@
 #include "SMSlib.h"
 #include "PSGlib.h"
 
-/* ================================================================
-   PSG directo (puerto $7F) - reproductor de música monofónico
-   PSG del SMS/GG: 3 canales tono + 1 ruido.
-   - Latch byte: 1 ccr dddd  (c=canal 0..3, r=1 para vol, 0 para tono lo)
-   - Data byte:  0 dddddd    (6 bits altos del tono)
-   Tono: count = 3579545 / (32 * freq_hz) (aproximado)
-   Volumen: 0=máx, 15=silencio (atenuación).
-   ================================================================ */
-__sfr __at 0x7F PSG_port;
+#include "music.h"
+
 __sfr __at 0x00 GG_port00;    /* GG: bit 7 = Start button (0=pressed) */
 #define GG_START_PRESSED()  (!(GG_port00 & 0x80))
-
-static void psg_set_tone(unsigned char chan, unsigned int count)
-{
-  PSG_port = (unsigned char)(0x80 | (chan << 5) | (count & 0x0F));
-  PSG_port = (unsigned char)((count >> 4) & 0x3F);
-}
-static void psg_set_vol(unsigned char chan, unsigned char atten)
-{
-  PSG_port = (unsigned char)(0x80 | (chan << 5) | 0x10 | (atten & 0x0F));
-}
-static void psg_silence_all(void)
-{
-  psg_set_vol(0, 15); psg_set_vol(1, 15);
-  psg_set_vol(2, 15); psg_set_vol(3, 15);
-}
-
-/* Índices de nota: A3 a A5 (25 semitonos) */
-#define N_A3 0
-#define N_AS3 1
-#define N_B3 2
-#define N_C4 3
-#define N_CS4 4
-#define N_D4 5
-#define N_DS4 6
-#define N_E4 7
-#define N_F4 8
-#define N_FS4 9
-#define N_G4 10
-#define N_GS4 11
-#define N_A4 12
-#define N_AS4 13
-#define N_B4 14
-#define N_C5 15
-#define N_CS5 16
-#define N_D5 17
-#define N_DS5 18
-#define N_E5 19
-#define N_F5 20
-#define N_FS5 21
-#define N_G5 22
-#define N_GS5 23
-#define N_A5 24
-
-#define N_REST 0xFD
-#define N_LOOP 0xFE
-
-static const unsigned int note_counts[25] = {
-  508, 480, 453,   /* A3  A#3 B3  */
-  427, 404, 381, 360, 339, 320, 302, 285, 269,  /* C4..G#4 */
-  254, 240, 226,   /* A4  A#4 B4  */
-  214, 202, 190, 180, 170, 160, 151, 143, 135,  /* C5..G#5 */
-  127              /* A5 */
-};
-
-/* Korobéiniki (Tema A de Tetris NES) - línea de melodía principal,
-   aproximadamente a 150 BPM. Pares (nota, duración_en_corcheas). */
-static const unsigned char korobeiniki[] = {
-  /* Primera mitad */
-  N_E5, 2, N_B4, 1, N_C5, 1, N_D5, 2, N_C5, 1, N_B4, 1,
-  N_A4, 2, N_A4, 1, N_C5, 1, N_E5, 2, N_D5, 1, N_C5, 1,
-  N_B4, 3, N_C5, 1, N_D5, 2, N_E5, 2,
-  N_C5, 2, N_A4, 2, N_A4, 4,
-  /* Segunda mitad (sube octava) */
-  N_D5, 3, N_F5, 1, N_A5, 2, N_G5, 1, N_F5, 1,
-  N_E5, 3, N_C5, 1, N_E5, 2, N_D5, 1, N_C5, 1,
-  N_B4, 2, N_B4, 1, N_C5, 1, N_D5, 2, N_E5, 2,
-  N_C5, 2, N_A4, 2, N_A4, 4,
-  N_LOOP
-};
-
-/* Estado del reproductor */
-static const unsigned char *song_ptr   = 0;
-static const unsigned char *song_start = 0;
-static unsigned int music_timer = 0;     /* frames restantes para la nota actual */
-#define EIGHTH_FRAMES 6    /* 1 corchea = 6 frames NTSC ~ 100ms (~300 BPM)  */
-#define MUSIC_ATTEN   2    /* volumen de la melodía (0=máx, 15=mudo)        */
-#define BASS_ATTEN    5    /* volumen del bajo (más suave que melodía)      */
-
-static void music_start(const unsigned char *song)
-{
-  song_start  = song;
-  song_ptr    = song;
-  music_timer = 0;
-  psg_silence_all();
-}
-static void music_stop(void)
-{
-  song_ptr = 0;
-  psg_silence_all();
-}
-
-/* Canal 0 = melodía, canal 1 = bajo (1 octava abajo, staccato).
-   Llamar 1 vez por frame. */
-static unsigned int music_note_len = 0;  /* duración total de la nota actual */
-
-static void music_tick(void)
-{
-  if (!song_ptr) return;
-  if (music_timer == 0) {
-    unsigned char note, dur;
-    for (;;) {
-      note = *song_ptr++;
-      if (note == N_LOOP) { song_ptr = song_start; continue; }
-      break;
-    }
-    dur = *song_ptr++;
-    music_note_len = (unsigned int)dur * EIGHTH_FRAMES;
-    music_timer    = music_note_len;
-    if (note == N_REST) {
-      psg_set_vol(0, 15);
-      psg_set_vol(1, 15);
-    } else {
-      psg_set_tone(0, note_counts[note]);
-      psg_set_vol(0, MUSIC_ATTEN);
-      if (note >= 12) {
-        psg_set_tone(1, note_counts[note - 12]);
-        psg_set_vol(1, BASS_ATTEN);
-      } else {
-        psg_set_vol(1, 15);
-      }
-    }
-  } else {
-    music_timer--;
-    /* Bajo staccato: silenciar a mitad de la nota */
-    if (music_timer == music_note_len / 2) psg_set_vol(1, 15);
-    /* Silenciar melodía al final para separar notas consecutivas */
-    if (music_timer == 1) psg_set_vol(0, 15);
-  }
-}
 
 /* ================================================================
    Tetris GG - iteración 3: HUD, NEXT, ladrillos, piezas 3D
@@ -234,19 +98,6 @@ static void gen_anim_tiles(void)
     }
   }
 }
-
-/* Tile vacío legacy (grid sutil) - lo mantenemos por si queremos volver */
-#define EMPTY_ROW(mask) 0x00, (unsigned char)~(mask), 0x00, 0x00
-static const unsigned char empty_board_tile[32] = {
-  EMPTY_ROW(0xFF),                       /* fila 0: completamente color 2 */
-  EMPTY_ROW(0xFF),
-  EMPTY_ROW(0xFF),
-  EMPTY_ROW(0xEF),                       /* fila 3: punto oscuro en col 4 */
-  EMPTY_ROW(0xFF),
-  EMPTY_ROW(0xFF),
-  EMPTY_ROW(0xFF),
-  EMPTY_ROW(0xFF)
-};
 
 /* ---------------- Tileset estático -----------------------------
    Orden:
@@ -611,8 +462,8 @@ static const unsigned int shapes[7][4] = {
   /* I */ { 0x00F0, 0x4444, 0x0F00, 0x2222 },
   /* O */ { 0x0660, 0x0660, 0x0660, 0x0660 },
   /* T */ { 0x0072, 0x0262, 0x0270, 0x0232 },
-  /* S */ { 0x0036, 0x0462, 0x0036, 0x0462 },
-  /* Z */ { 0x0063, 0x0264, 0x0063, 0x0264 },
+  /* S */ { 0x0036, 0x0462, 0x0360, 0x0231 },
+  /* Z */ { 0x0063, 0x0264, 0x0630, 0x0132 },
   /* J */ { 0x0071, 0x0226, 0x0470, 0x0322 },
   /* L */ { 0x0074, 0x0622, 0x0170, 0x0223 }
 };
@@ -623,27 +474,59 @@ static signed char   cur_x;
 static signed char   cur_y;
 static unsigned char next_type;    /* pieza que caerá después */
 
+static unsigned char down_block = 0;  /* soft drop bloqueado hasta soltar ABAJO */
+
+/* Lock delay (estilo guideline): al apoyarse, la pieza tarda LOCK_DELAY
+   frames en fijarse. Mover/rotar reinicia la cuenta, como mucho
+   LOCK_MAX_RESETS veces (si no, se podría girar eternamente). Bajar a
+   una fila nueva devuelve las reinicializaciones. */
+#define LOCK_DELAY       30
+#define LOCK_MAX_RESETS  15
+static unsigned char lock_timer;
+static unsigned char lock_resets;
+static signed char   lowest_y;
+static unsigned char lock_now = 0;     /* hard drop: fijar ya */
+static unsigned char last_rotate = 0;  /* última acción fue una rotación (T-spin) */
+static unsigned char last_kick = 0;    /* índice del kick SRS usado (0..4) */
+
 /* PRNG xorshift 16-bit — ciclo 65535, buena distribución */
 static unsigned int rng_state;
+static volatile unsigned int frame_count = 0;   /* lo incrementa la ISR */
 
+/* La semilla sale del contador de frames de la ISR: depende de cuánto
+   tarda el jugador en pulsar Start, así que cada partida es distinta.
+   (Leer VCount justo tras el VBlank daba casi siempre el mismo valor.) */
 static void rng_seed(void)
 {
-  /* Mezclar dos lecturas de VCount para semilla de 16 bits */
-  unsigned char a = SMS_getVCount();
-  unsigned char b;
-  /* Pequeño busy-wait para que la segunda lectura difiera */
-  { unsigned char j; for (j = 0; j < a; j++); }
-  b = SMS_getVCount();
-  rng_state = ((unsigned int)a << 8) | b;
+  rng_state = (unsigned int)(frame_count * 0x9E37u) ^ SMS_getVCount();
   if (rng_state == 0) rng_state = 0xBEEF;
 }
 
-static unsigned char rand7(void)
+static unsigned char rng_next(void)
 {
   rng_state ^= rng_state << 7;
   rng_state ^= rng_state >> 9;
   rng_state ^= rng_state << 8;
-  return (unsigned char)(rng_state % 7);
+  return (unsigned char)rng_state;
+}
+
+/* Bolsa de 7: cada tanda de 7 piezas contiene una de cada tipo en orden
+   aleatorio. Evita sequías largas de palos y rachas de S/Z.          */
+static unsigned char bag[7];
+static unsigned char bag_pos = 7;
+
+static unsigned char rand7(void)
+{
+  if (bag_pos >= 7) {
+    unsigned char i, j, t;
+    for (i = 0; i < 7; i++) bag[i] = i;
+    for (i = 6; i > 0; i--) {
+      j = (unsigned char)(rng_next() % (unsigned char)(i + 1));
+      t = bag[i]; bag[i] = bag[j]; bag[j] = t;
+    }
+    bag_pos = 0;
+  }
+  return bag[bag_pos++];
 }
 
 /* Optimizado: extrae el nibble de la fila primero (shift constante 0/4/8/12)
@@ -726,6 +609,11 @@ static unsigned char spawn_piece(void)
   cur_rot  = 0;
   cur_x    = 3;
   cur_y    = (signed char)-1;
+  down_block = 1;   /* si ABAJO sigue pulsado, no arrastrar el soft drop */
+  lock_timer  = LOCK_DELAY;
+  lock_resets = 0;
+  lowest_y    = cur_y;
+  last_rotate = 0;
   return fits(cur_type, cur_rot, cur_x, cur_y);
 }
 
@@ -889,48 +777,6 @@ static void paint_piece_blocks(signed char bl[4][2])
   }
 }
 
-/* Ghost blocks: la pieza en la posición de aterrizaje con tile outline */
-static void ghost_blocks(signed char out[4][2])
-{
-  signed char ly = landing_y();
-  unsigned char lx, lly, i = 0;
-  for (lly = 0; lly < 4; lly++) {
-    for (lx = 0; lx < 4; lx++) {
-      if (shape_has(cur_type, cur_rot, lx, lly)) {
-        out[i][0] = cur_x + (signed char)lx;
-        out[i][1] = ly + (signed char)lly;
-        i++;
-      }
-    }
-  }
-}
-
-static void paint_ghost_blocks(signed char bl[4][2])
-{
-  unsigned char i;
-  signed char sy;
-  for (i = 0; i < 4; i++) {
-    if (bl[i][0] < 0 || bl[i][0] >= BOARD_W) continue;
-    sy = bl[i][1] - (signed char)HIDDEN_H;
-    if (sy < 0 || sy >= (signed char)VISIBLE_H) continue;
-    /* Solo pintar ghost si la celda está vacía (no solaparse con pieza real) */
-    if (!board[bl[i][1]][bl[i][0]])
-      screen_set(BOARD_X0 + (unsigned char)bl[i][0],
-                 BOARD_Y0 + (unsigned char)sy, TILE_GHOST);
-  }
-}
-
-static void restore_ghost_blocks(void)
-{
-  unsigned char i;
-  for (i = 0; i < 4; i++) {
-    if (prev_ghost[i][0] < 0 || prev_ghost[i][0] >= BOARD_W) continue;
-    if (prev_ghost[i][1] < 0 || prev_ghost[i][1] >= BOARD_H) continue;
-    paint_board_cell((unsigned char)prev_ghost[i][0],
-                     (unsigned char)prev_ghost[i][1]);
-  }
-}
-
 static void restore_prev_blocks(void)
 {
   unsigned char i;
@@ -968,10 +814,8 @@ static unsigned char fall_frames(void)
 }
 
 static unsigned char fall_timer = 48;
-static unsigned char game_over  = 0;
 static unsigned char need_full_board_repaint = 0;
 static unsigned char need_hud_refresh = 1;
-static unsigned char heartbeat = 0;
 
 /* ---- Estado del juego para animación de line clear ---- */
 #define STATE_TITLE    0
@@ -985,9 +829,12 @@ static unsigned char start_was_pressed = 0;  /* para edge-detect del Start de GG
 static unsigned char flash_rows[4];     /* índices (en board) de las filas llenas */
 static unsigned char n_flash_rows = 0;
 static unsigned char flash_timer = 0;
+static unsigned char gameover_timer = 0; /* frames desde que empezó el game over */
+static unsigned long hiscore = 0;
 
 #define FLASH_DURATION 24    /* frames totales de animación (~400ms)     */
 #define FLASH_PHASE    6     /* alterna blanco/normal cada N frames      */
+#define SCORE_MAX      999999UL   /* el HUD muestra 6 dígitos              */
 
 /* Escanea board[][] y rellena `out` con los índices de filas llenas.
    Devuelve el número encontrado (0..4). No modifica board. */
@@ -1007,6 +854,13 @@ static unsigned char scan_full_rows(unsigned char *out)
   return n;
 }
 
+static void add_score(unsigned long pts)
+{
+  score += pts;
+  if (score > SCORE_MAX) score = SCORE_MAX;
+  need_hud_refresh = 1;
+}
+
 /* Puntuación clásica (NES-style) */
 static const unsigned int line_score[5] = { 0, 40, 100, 300, 1200 };
 
@@ -1014,29 +868,125 @@ static void add_lines(unsigned char n)
 {
   if (n == 0) return;
   if (n > 4) n = 4;
-  score += (unsigned long)line_score[n] * (unsigned long)(level + 1);
   lines += n;
   /* Nivel sube cada 10 líneas */
   {
     unsigned char new_level = (unsigned char)(lines / 10);
     if (new_level > MAX_LEVEL) new_level = MAX_LEVEL;
-    if (new_level != level) level = new_level;
+    if (new_level != level) {
+      level = new_level;
+      sfx_play(SFX_LEVELUP);
+    }
   }
   need_hud_refresh = 1;
 }
 
+/* Música rápida cuando la pila llega a las 5 filas visibles de arriba */
+#define DANGER_ROW (HIDDEN_H + 5)
+static void update_danger(void)
+{
+  unsigned char y, x;
+  for (y = 0; y < DANGER_ROW; y++)
+    for (x = 0; x < BOARD_W; x++)
+      if (board[y][x]) { music_set_danger(1); return; }
+  music_set_danger(0);
+}
+
+/* Única entrada al estado de game over (antes había 2 caminos y uno
+   se perdía: ver finalize_line_clear). */
+static void enter_game_over(void)
+{
+  game_state = STATE_GAMEOVER;
+  gameover_timer = 0;
+  if (score > hiscore) hiscore = score;
+  music_stop();
+  sfx_play(SFX_GAMEOVER);
+}
+
 static unsigned char soft_dropping = 0;  /* 1 si el descenso actual es por soft drop */
 
-static unsigned char piece_step_down(void)
+/* Gravedad: baja una fila si cabe. La fijación la decide el lock delay. */
+static void piece_step_down(void)
 {
-  if (fits(cur_type, cur_rot, cur_x, cur_y + 1)) {
-    cur_y++;
-    if (soft_dropping) { score++; need_hud_refresh = 1; }
-    return 1;
+  if (!fits(cur_type, cur_rot, cur_x, cur_y + 1)) return;
+  cur_y++;
+  last_rotate = 0;
+  if (soft_dropping) add_score(1);
+  if (cur_y > lowest_y) {
+    lowest_y    = cur_y;
+    lock_resets = 0;
+    lock_timer  = LOCK_DELAY;
   }
+}
+
+/* T-spin, regla de las 3 esquinas: la T se fijó justo tras rotar y 3 de
+   las 4 esquinas de su caja 3x3 están ocupadas (o fuera del tablero).
+   Completo si las 2 esquinas "de frente" (hacia donde apunta) están
+   ocupadas o si entró con el último kick SRS; si no, es mini. */
+#define TSPIN_NONE 0
+#define TSPIN_MINI 1
+#define TSPIN_FULL 2
+static unsigned char cell_blocked(signed char x, signed char y)
+{
+  if (x < 0 || x >= BOARD_W || y >= BOARD_H) return 1;
+  if (y < 0) return 0;
+  return board[y][x] != 0;
+}
+static unsigned char tspin_check(void)
+{
+  /* Esquinas en orden horario: sup-izq, sup-der, inf-der, inf-izq.
+     Las de frente para la rotación r son la r y la r+1. */
+  static const signed char cx[4] = { 0, 2, 2, 0 };
+  static const signed char cy[4] = { 0, 0, 2, 2 };
+  unsigned char filled[4], i, n = 0;
+  if (cur_type != PIECE_T || !last_rotate) return TSPIN_NONE;
+  for (i = 0; i < 4; i++) {
+    filled[i] = cell_blocked((signed char)(cur_x + cx[i]), (signed char)(cur_y + cy[i]));
+    n += filled[i];
+  }
+  if (n < 3) return TSPIN_NONE;
+  if ((filled[cur_rot] && filled[(cur_rot + 1) & 3]) || last_kick == 4)
+    return TSPIN_FULL;
+  return TSPIN_MINI;
+}
+
+static unsigned char pending_tspin = TSPIN_NONE;
+static unsigned char back_to_back = 0;   /* último clear fue Tetris o T-spin */
+static unsigned char label_timer = 0;    /* frames que queda visible el cartel */
+static const char *label_text = 0;
+
+/* Puntos de T-spin según líneas (escala NES, x (nivel+1)) */
+static const unsigned int tspin_score[3][4] = {
+  {   0,   0,   0,    0 },
+  {  20,  80, 200,    0 },   /* mini   */
+  { 100, 300, 700, 1200 }    /* T-spin */
+};
+
+/* Puntúa un bloqueo: líneas normales, Tetris, T-spins y back-to-back
+   (x1.5 si se encadenan dos clears "difíciles"). */
+static void score_clear(unsigned char n, unsigned char tspin)
+{
+  unsigned long pts;
+  unsigned char difficult = (n == 4) || (tspin && n > 0);
+  if (n > 4) n = 4;
+  pts = tspin ? tspin_score[tspin][n] : line_score[n];
+  pts *= (unsigned long)(level + 1);
+  if (difficult && back_to_back) pts += pts / 2;
+  if (n > 0) back_to_back = difficult;
+  if (pts) add_score(pts);
+
+  if (tspin)       { label_text = (tspin == TSPIN_FULL) ? "TSPIN" : "MINI"; label_timer = 90; }
+  else if (n == 4) { label_text = "TETRIS"; label_timer = 90; }
+  if (n) add_lines(n);
+}
+
+static void lock_current_piece(void)
+{
+  pending_tspin = tspin_check();
   lock_piece();
   need_full_board_repaint = 1;  /* mostrar pieza recién bloqueada  */
   have_prev = 0;
+  sfx_play(SFX_LOCK);
 
   /* ¿hay líneas completas? -> entrar en STATE_FLASH y esperar a que
      termine la animación antes de colapsar y spawnear. */
@@ -1044,13 +994,18 @@ static unsigned char piece_step_down(void)
   if (n_flash_rows > 0) {
     game_state  = STATE_FLASH;
     flash_timer = FLASH_DURATION;
-    return 0;
+    sfx_play(pending_tspin ? SFX_TSPIN : (n_flash_rows == 4 ? SFX_TETRIS : SFX_LINE));
+    return;
   }
 
-  /* Sin líneas: flujo normal, spawn inmediato. */
-  if (!spawn_piece()) { game_over = 1; game_state = STATE_GAMEOVER; }
+  /* Sin líneas: un T-spin sin líneas también puntúa */
+  if (pending_tspin) {
+    score_clear(0, pending_tspin);
+    sfx_play(SFX_TSPIN);
+  }
+  update_danger();
+  if (!spawn_piece()) enter_game_over();
   need_hud_refresh = 1;
-  return 0;
 }
 
 /* Pinta las filas que están en flash: alterna entre blanco y su color
@@ -1079,20 +1034,42 @@ static void paint_flash_rows(void)
    puntuación y spawnea nueva pieza. */
 static void finalize_line_clear(void)
 {
-  unsigned char removed = clear_lines();    /* removerá exactamente n_flash_rows */
-  (void)removed;
-  add_lines(n_flash_rows);
+  clear_lines();    /* removerá exactamente n_flash_rows */
+  score_clear(n_flash_rows, pending_tspin);
   n_flash_rows = 0;
   need_full_board_repaint = 1;
   have_prev = 0;
-  if (!spawn_piece()) { game_over = 1; game_state = STATE_GAMEOVER; }
-  need_hud_refresh = 1;
+  update_danger();
+  /* BUG corregido: antes se ponía STATE_GAMEOVER y a continuación se
+     pisaba con STATE_PLAY, dejando el juego congelado con game_over=1. */
   game_state = STATE_PLAY;
+  if (!spawn_piece()) enter_game_over();
+  need_hud_refresh = 1;
 }
 
 /* ================================================================
    Game Over overlay + reinicio
    ================================================================ */
+/* "PRESS START" del título (parpadea: on=0 lo borra) */
+static void paint_press_start(unsigned char on)
+{
+  static const char txt[] = "PRESS START";
+  unsigned char i;
+  for (i = 0; txt[i]; i++)
+    screen_set((unsigned char)(4 + i), 14,
+               (on && txt[i] != ' ') ? char_to_tile(txt[i]) : TILE_BG);
+}
+
+/* 6 dígitos con ceros a la izquierda (para fondos que no son el panel) */
+static void paint_digits6(unsigned char sx, unsigned char sy, unsigned long v)
+{
+  unsigned char i;
+  for (i = 6; i > 0; i--) {
+    screen_set((unsigned char)(sx + i - 1), sy, TILE_DIGIT((unsigned char)(v % 10)));
+    v /= 10;
+  }
+}
+
 /* Splash screen estilo GB Tetris adaptada a GG (sin Nintendo, obviamente).
    Cielo nocturno con estrellas + luna + título + silueta del Kremlin
    hecha con piezas de Tetris (meta-homenaje) + muralla de ladrillos. */
@@ -1152,47 +1129,51 @@ static void paint_title_screen(void)
     screen_set(x, 12, TILE_BRICK);
   }
 
-  /* --- "PRESS START" (cream) --- */
-  screen_set(4, 14, char_to_tile('P'));
-  screen_set(5, 14, char_to_tile('R'));
-  screen_set(6, 14, char_to_tile('E'));
-  screen_set(7, 14, char_to_tile('S'));
-  screen_set(8, 14, char_to_tile('S'));
-  screen_set(10, 14, char_to_tile('S'));
-  screen_set(11, 14, char_to_tile('T'));
-  screen_set(12, 14, char_to_tile('A'));
-  screen_set(13, 14, char_to_tile('R'));
-  screen_set(14, 14, char_to_tile('T'));
+  paint_press_start(1);
+
+  /* --- Récord de la sesión --- */
+  screen_print(5, 16, "TOP");
+  paint_digits6(9, 16, hiscore);
 
   /* --- Año --- */
-  screen_set(8,  16, TILE_DIGIT(2));
-  screen_set(9,  16, TILE_DIGIT(0));
-  screen_set(10, 16, TILE_DIGIT(2));
-  screen_set(11, 16, TILE_DIGIT(6));
+  screen_set(8,  17, TILE_DIGIT(2));
+  screen_set(9,  17, TILE_DIGIT(0));
+  screen_set(10, 17, TILE_DIGIT(2));
+  screen_set(11, 17, TILE_DIGIT(6));
 }
 
-/* Overlay de pausa sobre el tablero */
+/* Rellena una fila visible del tablero (coords de pantalla) con un tile */
+static void fill_board_row(unsigned char sy, unsigned char tile)
+{
+  unsigned char x;
+  for (x = 0; x < BOARD_W; x++)
+    screen_set((unsigned char)(BOARD_X0 + x), (unsigned char)(BOARD_Y0 + sy), tile);
+}
+
+static void fill_panel_row(unsigned char sy)
+{
+  unsigned char x;
+  for (x = 13; x < 19; x++) screen_set(x, sy, TILE_PANEL);
+}
+
+/* Pausa: se oculta el tablero (si no, pausar sirve para pensar sin
+   reloj) y se muestra PAUSE. */
 static void paint_pause_overlay(void)
 {
-  screen_set(3, 8, char_to_tile('P'));
-  screen_set(4, 8, char_to_tile('A'));
-  screen_set(5, 8, char_to_tile('U'));
-  screen_set(6, 8, char_to_tile('S'));
-  screen_set(7, 8, char_to_tile('E'));
+  unsigned char y;
+  for (y = 0; y < VISIBLE_H; y++)
+    fill_board_row(y, TILE_EMPTY);
+  fill_board_row(8, TILE_PANEL);
+  screen_print(4, 8, "PAUSE");
 }
 
 static void paint_gameover_overlay(void)
 {
-  /* "GAME" centrado en fila 7, "OVER" en fila 9 del tablero */
-  screen_set(3, 7, char_to_tile('G'));
-  screen_set(4, 7, char_to_tile('A'));
-  screen_set(5, 7, char_to_tile('M'));
-  screen_set(6, 7, char_to_tile('E'));
-
-  screen_set(3, 9, char_to_tile('O'));
-  screen_set(4, 9, char_to_tile('V'));
-  screen_set(5, 9, char_to_tile('E'));
-  screen_set(6, 9, char_to_tile('R'));
+  unsigned char y;
+  for (y = 6; y <= 10; y++)
+    fill_board_row(y, TILE_PANEL);
+  screen_print(4, 7, "GAME");
+  screen_print(4, 9, "OVER");
 }
 
 static void reset_game(void);  /* forward decl */
@@ -1202,17 +1183,33 @@ static void reset_game(void);  /* forward decl */
    ================================================================ */
 #define DAS_FRAMES 10
 #define ARR_FRAMES 3
-#define ROT_DAS_FRAMES 25
-#define ROT_ARR_FRAMES 12
+#define SOFT_DROP_FRAMES 2   /* soft drop: 1 celda cada 2 frames (30/s) */
 
 static unsigned char das_counter_l = 0;
 static unsigned char das_counter_r = 0;
-static unsigned char rot_cd_cw  = 0;
-static unsigned char rot_cd_ccw = 0;
+/* Botones de acción única (rotar, hard drop): disparan al pulsar y no
+   se repiten hasta soltar. Se usa el estado "held" + flag en vez del
+   flanco de SMS_getKeysPressed (ver nota DAS en memoria del proyecto). */
+static unsigned char held_cw   = 0;
+static unsigned char held_ccw  = 0;
+static unsigned char held_drop = 0;
+
+/* Mover o rotar con éxito estando apoyada reinicia el lock delay */
+static void lock_reset(void)
+{
+  if (lock_resets < LOCK_MAX_RESETS) {
+    lock_resets++;
+    lock_timer = LOCK_DELAY;
+  }
+}
 
 static void try_move(signed char dx)
 {
-  if (fits(cur_type, cur_rot, cur_x + dx, cur_y)) cur_x += dx;
+  if (fits(cur_type, cur_rot, cur_x + dx, cur_y)) {
+    cur_x += dx;
+    last_rotate = 0;
+    lock_reset();
+  }
 }
 
 /* Calcula la Y de aterrizaje. Extrae los 4 bloques una vez y luego
@@ -1252,22 +1249,61 @@ static void hard_drop(void)
 {
   signed char ly = landing_y();
   signed char dist = (signed char)(ly - cur_y);
-  if (dist > 0) score += (unsigned long)dist * 2;
+  if (dist > 0) { add_score((unsigned long)dist * 2); last_rotate = 0; }
   cur_y = ly;
-  need_hud_refresh = 1;
-  /* El bloqueo se gestiona al bajar 0 filas en piece_step_down */
+  lock_now = 1;
 }
 
-static void try_rotate(unsigned char nr)
+/* Super Rotation System: tablas de kicks oficiales (dx, dy) con dy
+   hacia ABAJO positivo (la tabla de la guideline usa y hacia arriba).
+   Orden de transiciones: 0>R, R>0, R>2, 2>R, 2>L, L>2, L>0, 0>L.
+   Los kicks verticales son los que permiten meter la pieza en un hueco
+   girando (T-spins, "twists" de S/Z/J/L). */
+static const signed char kick_jlstz[8][10] = {
+  { 0,0, -1,0, -1,-1, 0, 2, -1, 2 },
+  { 0,0,  1,0,  1, 1, 0,-2,  1,-2 },
+  { 0,0,  1,0,  1, 1, 0,-2,  1,-2 },
+  { 0,0, -1,0, -1,-1, 0, 2, -1, 2 },
+  { 0,0,  1,0,  1,-1, 0, 2,  1, 2 },
+  { 0,0, -1,0, -1, 1, 0,-2, -1,-2 },
+  { 0,0, -1,0, -1, 1, 0,-2, -1,-2 },
+  { 0,0,  1,0,  1,-1, 0, 2,  1, 2 }
+};
+static const signed char kick_i[8][10] = {
+  { 0,0, -2,0,  1,0, -2, 1,  1,-2 },
+  { 0,0,  2,0, -1,0,  2,-1, -1, 2 },
+  { 0,0, -1,0,  2,0, -1,-2,  2, 1 },
+  { 0,0,  1,0, -2,0,  1, 2, -2,-1 },
+  { 0,0,  2,0, -1,0,  2,-1, -1, 2 },
+  { 0,0, -2,0,  1,0, -2, 1,  1,-2 },
+  { 0,0,  1,0, -2,0,  1, 2, -2,-1 },
+  { 0,0, -1,0,  2,0, -1,-2,  2, 1 }
+};
+
+static void try_rotate(unsigned char cw)
 {
-  if (fits(cur_type, nr, cur_x, cur_y))          cur_rot = nr;
-  else if (fits(cur_type, nr, cur_x - 1, cur_y)) { cur_rot = nr; cur_x--; }
-  else if (fits(cur_type, nr, cur_x + 1, cur_y)) { cur_rot = nr; cur_x++; }
+  unsigned char nr  = (unsigned char)((cur_rot + (cw ? 1 : 3)) & 3);
+  unsigned char idx = cw ? (unsigned char)(cur_rot << 1)
+                         : (unsigned char)(((cur_rot << 1) + 7) & 7);
+  const signed char *k = (cur_type == PIECE_I) ? kick_i[idx] : kick_jlstz[idx];
+  unsigned char i;
+  if (cur_type == PIECE_O) return;   /* el O no rota */
+  for (i = 0; i < 5; i++, k += 2) {
+    signed char nx = (signed char)(cur_x + k[0]);
+    signed char ny = (signed char)(cur_y + k[1]);
+    if (fits(cur_type, nr, nx, ny)) {
+      cur_rot = nr; cur_x = nx; cur_y = ny;
+      last_rotate = 1;
+      last_kick   = i;
+      lock_reset();
+      sfx_play(SFX_ROTATE);
+      return;
+    }
+  }
 }
 
 static void handle_input(void)
 {
-  unsigned int k = SMS_getKeysPressed();
   unsigned int h = SMS_getKeysStatus();
 
   if (h & PORT_A_KEY_LEFT) {
@@ -1287,38 +1323,33 @@ static void handle_input(void)
   } else das_counter_r = 0;
 
   if (h & PORT_A_KEY_1) {
-    if (rot_cd_cw == 0) {
-      try_rotate((unsigned char)((cur_rot + 1) & 3));
-      rot_cd_cw = ROT_DAS_FRAMES;
-    } else if (--rot_cd_cw == 0) {
-      try_rotate((unsigned char)((cur_rot + 1) & 3));
-      rot_cd_cw = ROT_ARR_FRAMES;
-    }
-  } else rot_cd_cw = 0;
+    if (!held_cw) { try_rotate(1); held_cw = 1; }
+  } else held_cw = 0;
 
   if (h & PORT_A_KEY_2) {
-    if (rot_cd_ccw == 0) {
-      try_rotate((unsigned char)((cur_rot + 3) & 3));
-      rot_cd_ccw = ROT_DAS_FRAMES;
-    } else if (--rot_cd_ccw == 0) {
-      try_rotate((unsigned char)((cur_rot + 3) & 3));
-      rot_cd_ccw = ROT_ARR_FRAMES;
-    }
-  } else rot_cd_ccw = 0;
+    if (!held_ccw) { try_rotate(0); held_ccw = 1; }
+  } else held_ccw = 0;
 
+  /* Soft drop. Tras aparecer una pieza nueva hay que soltar ABAJO antes
+     de que vuelva a funcionar: si no, la pieza siguiente cae disparada. */
+  soft_dropping = 0;
   if (h & PORT_A_KEY_DOWN) {
-    if (fall_timer > 1) fall_timer = 1;   /* 60 celdas/seg soft drop */
-    soft_dropping = 1;
+    if (!down_block) {
+      if (fall_timer > SOFT_DROP_FRAMES) fall_timer = SOFT_DROP_FRAMES;
+      soft_dropping = 1;
+    }
   } else {
-    soft_dropping = 0;
+    down_block = 0;
   }
 
-  /* Hard drop: UP tira la pieza al fondo de golpe + bloqueo inmediato */
+  /* Hard drop: ARRIBA tira la pieza al fondo. Una vez por pulsación;
+     antes, mantenerlo encadenaba caídas de las piezas siguientes. */
   if (h & PORT_A_KEY_UP) {
-    hard_drop();
-    /* Forzamos caída inmediata para que piece_step_down bloquee la pieza */
-    fall_timer = 1;
-  }
+    if (!held_drop) {
+      held_drop = 1;
+      hard_drop();      /* pone lock_now: se fija este mismo frame */
+    }
+  } else held_drop = 0;
 }
 
 /* Datos PSG incluidos aquí (después del código) para que SDCC los
@@ -1328,6 +1359,27 @@ static void handle_input(void)
 /* ================================================================
    Reset / reinicio completo del juego (sin reiniciar VRAM/tiles)
    ================================================================ */
+/* ---- Música: título (PSGlib, Alex Kidd) / partida (motor propio) ----
+   title_music es de 1 byte: la ISR deja de llamar a PSGFrame en cuanto
+   se pone a 0, así que PSGStop/PSGPlay nunca compiten con ella.      */
+static volatile unsigned char title_music = 0;
+
+static void start_title_music(void)
+{
+  music_stop();
+  title_music = 0;
+  PSGPlay(underwater_psg);
+  title_music = 1;
+}
+
+static void start_game_music(void)
+{
+  title_music = 0;
+  PSGStop();
+  music_set_danger(0);
+  music_play_game();
+}
+
 static void reset_game(void)
 {
   unsigned char x, y;
@@ -1335,15 +1387,17 @@ static void reset_game(void)
     for (x = 0; x < BOARD_W; x++)
       board[y][x] = 0;
   score = 0; level = 0; lines = 0;
-  game_over = 0;
   game_state = STATE_PLAY;
   n_flash_rows = 0;
   have_prev = 0;
   invalidate_ghost_cache();
   soft_dropping = 0;
   das_counter_l = 0; das_counter_r = 0;
-  rot_cd_cw = 0; rot_cd_ccw = 0;
+  /* El botón con el que se empezó la partida no debe rotar ni soltar */
+  held_cw = 1; held_ccw = 1; held_drop = 1;
   rng_seed();   /* re-sembrar en cada reinicio */
+  bag_pos = 7;  /* bolsa nueva */
+  back_to_back = 0; label_timer = 0; lock_now = 0;
   next_type = rand7();
   spawn_piece();
   fall_timer = fall_frames();
@@ -1353,18 +1407,22 @@ static void reset_game(void)
   paint_hud_labels();
   need_full_board_repaint = 1;
   need_hud_refresh = 1;
+  start_game_music();
 }
 
 /* ================================================================
    Handler del VBlank IRQ: corre a 60Hz estable aunque el main loop
-   se atasque. Ejecuta PSGFrame (música, escribe solo al PSG) y
-   marca un flag para que el main loop vuelque el tile animado.
-   NUNCA escribe al VDP desde aquí: eso causaba race con nt_flush.
+   se atasque. Ejecuta la música (PSGFrame en el título, motor propio
+   en partida) y marca un flag para que el main loop vuelque el tile
+   animado. NUNCA escribe al VDP desde aquí: eso causaba race con
+   nt_flush.
    ================================================================ */
 #define ANIM_SPEED 6    /* 60/6 = 10 Hz visual, más tolerante a frame drops */
 static void vblank_isr(void)
 {
-  PSGFrame();
+  frame_count++;
+  if (title_music) PSGFrame();
+  music_frame();
   if (++anim_counter >= ANIM_SPEED) {
     anim_counter = 0;
     anim_frame_idx = (unsigned char)((anim_frame_idx + 1) & 7);
@@ -1372,13 +1430,14 @@ static void vblank_isr(void)
   }
 }
 
+#define GAMEOVER_CURTAIN (2 * VISIBLE_H)     /* una fila cada 2 frames */
+#define GAMEOVER_WAIT    (GAMEOVER_CURTAIN + 45)
+
 /* ================================================================
    Main
    ================================================================ */
 void main(void)
 {
-  unsigned char x, y;
-
   SMS_VRAMmemsetW(0, 0x0000, 16384);
 
   /* Cargar tileset estático (tile 0 solo) */
@@ -1389,7 +1448,6 @@ void main(void)
   /* Generar tiles animados de fondo y cargar el frame 0 */
   gen_anim_tiles();
   SMS_loadTiles(&anim_tiles[0], TILE_EMPTY, 32);
-  (void)empty_board_tile;   /* legacy, no usado */
   {
     static const unsigned char solid_panel[32]   = { SOLID_COLOR(3) };
     static const unsigned char solid_paccent[32] = { SOLID_COLOR(4) };
@@ -1457,12 +1515,11 @@ void main(void)
   nt_flush_all();
 
   game_state = STATE_TITLE;
-  psg_silence_all();
 
-  /* Música: Alex Kidd in Miracle World - Underwater (SN76489 puro, 2:27).
-     Registramos PSGFrame como handler del VBlank ISR: la música suena a
-     60Hz estable sin depender de la velocidad del main loop. */
-  PSGPlay(underwater_psg);
+  /* Música del título: Alex Kidd in Miracle World - Underwater (PSGlib).
+     En partida suena Korobeiniki con el motor propio (music.c). Ambos
+     corren en la ISR de VBlank a 60Hz estables. */
+  start_title_music();
   SMS_setFrameInterruptHandler(vblank_isr);   /* música + anim fondo a 60Hz */
 
   SMS_displayOn();
@@ -1482,6 +1539,7 @@ void main(void)
     nt_flush();
 
     if (game_state == STATE_TITLE) {
+      paint_press_start(!((unsigned char)frame_count & 0x20));
       /* Start (o Button 1/2) arranca partida */
       {
         unsigned int k = SMS_getKeysPressed();
@@ -1493,28 +1551,36 @@ void main(void)
         }
       }
     } else if (game_state == STATE_PAUSE) {
-      paint_pause_overlay();
       /* Start de GG reanuda (flanco: solo al pulsar, no al mantener) */
       if (GG_START_PRESSED() && !start_was_pressed) {
         game_state = STATE_PLAY;
         need_full_board_repaint = 1;
         invalidate_ghost_cache();
+        music_set_paused(0);
       }
       start_was_pressed = GG_START_PRESSED();
     } else if (game_state == STATE_PLAY) {
-      if (!game_over) {
-        /* Start de GG pausa (flanco) */
-        if (GG_START_PRESSED() && !start_was_pressed) {
-          game_state = STATE_PAUSE;
-        }
-        start_was_pressed = GG_START_PRESSED();
-        if (game_state == STATE_PLAY) {
-          handle_input();
-          if (--fall_timer == 0) {
-            fall_timer = fall_frames();
-            piece_step_down();
-          }
-        }
+      /* Start de GG pausa (flanco) */
+      if (GG_START_PRESSED() && !start_was_pressed) {
+        game_state = STATE_PAUSE;
+        paint_pause_overlay();
+        music_set_paused(1);
+        sfx_play(SFX_PAUSE);
+      }
+      start_was_pressed = GG_START_PRESSED();
+      if (game_state == STATE_PAUSE) continue;
+
+      handle_input();
+      if (lock_now) {
+        lock_now = 0;
+        lock_current_piece();
+      } else if (!fits(cur_type, cur_rot, cur_x, cur_y + 1)) {
+        /* Apoyada: corre el lock delay (la gravedad no hace nada) */
+        if (lock_timer <= 1) lock_current_piece();
+        else lock_timer--;
+      } else if (--fall_timer == 0) {
+        fall_timer = fall_frames();
+        piece_step_down();
       }
 
       /* Cache de pieza: solo re-renderizar si realmente cambió */
@@ -1613,27 +1679,44 @@ void main(void)
         finalize_line_clear();
       }
     } else if (game_state == STATE_GAMEOVER) {
-      /* Primer frame: pintar overlay GAME OVER sobre el tablero */
       if (need_full_board_repaint) {
         paint_full_board();
         need_full_board_repaint = 0;
       }
-      paint_gameover_overlay();
+      /* Telón de ladrillos de abajo arriba y luego el cartel */
+      if (gameover_timer < 255) gameover_timer++;
+      if (gameover_timer <= GAMEOVER_CURTAIN) {
+        if (!(gameover_timer & 1))
+          fill_board_row((unsigned char)(VISIBLE_H - gameover_timer / 2), TILE_BRICK);
+      } else {
+        paint_gameover_overlay();
+      }
 
-      /* Cualquier botón (A/B/Start) vuelve al menú principal */
+      /* Cualquier botón (A/B/Start) vuelve al título, pero no antes de
+         que acabe el telón: si no, machacar el botón de rotar mientras
+         mueres se saltaba la pantalla de game over sin verla. */
       {
         unsigned int k = SMS_getKeysPressed();
         unsigned char start_now = GG_START_PRESSED();
         unsigned char start_edge = (start_now && !start_was_pressed);
         start_was_pressed = start_now;
-        if ((k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || start_edge) {
+        if (gameover_timer >= GAMEOVER_WAIT &&
+            ((k & (PORT_A_KEY_1 | PORT_A_KEY_2)) || start_edge)) {
           paint_title_screen();
           game_state = STATE_TITLE;
+          start_title_music();
         }
       }
     }
 
     /* HUD solo en estados de juego (no en TITLE) */
+    if (label_timer && game_state != STATE_TITLE) {
+      if (label_timer == 90) {
+        fill_panel_row(17);
+        screen_print(13, 17, label_text);
+      }
+      if (--label_timer == 0) fill_panel_row(17);
+    }
     if (need_hud_refresh && game_state != STATE_TITLE) {
       paint_hud_numbers();
       paint_next_preview();

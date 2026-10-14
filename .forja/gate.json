@@ -1,0 +1,17 @@
+{
+  "min_tests": 1,
+  "checks": [
+    {
+      "name": "build",
+      "command": "cd tetrisgg && C:/msys64/usr/bin/make.exe -f Makefile.gg build/tetrisgg.ihx",
+      "required": true,
+      "timeout": 300
+    },
+    {
+      "name": "test",
+      "command": "python -m pytest -q tests",
+      "is_test": true,
+      "timeout": 120
+    }
+  ]
+}

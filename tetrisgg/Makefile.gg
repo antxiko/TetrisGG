@@ -18,7 +18,7 @@ ROM_DIR=../ROM
 PROGNAME=tetrisgg
 KEEP_ROMS=5
 
-OBJS=$(BUILD_DIR)/main_GG.rel
+OBJS=$(BUILD_DIR)/main_GG.rel $(BUILD_DIR)/music_GG.rel
 
 all: $(ROM_DIR)/$(PROGNAME).gg
 
@@ -30,6 +30,9 @@ $(ROM_DIR):
 
 $(BUILD_DIR)/%_GG.rel: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/main_GG.rel: music.h underwater_psg.h
+$(BUILD_DIR)/music_GG.rel: music.h
 
 $(BUILD_DIR)/$(PROGNAME).ihx: $(OBJS)
 	$(CC) -o $@ $(LDFLAGS) $(CRT0) $(SMSLIB_LIB) $(PSGLIB_LIB) $^
